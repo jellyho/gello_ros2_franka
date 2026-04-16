@@ -48,31 +48,11 @@ class GelloConfig:
     gripper_hold_pos_deg: float = 0.0
     """
     Dynamixel position (degrees) to hold with position-control torque
-    when the node starts.  The gripper servo is placed in Position
-    Control Mode and driven to this setpoint so it springs back whenever
-    the user releases it.  Typically the midpoint or natural open pose.
-    """
-
-    gripper_current_limit_ma: float = 500.0
-    """
-    Maximum current (mA) the gripper servo is allowed to draw.
-    This directly caps the maximum torque output.
-    Lower value  → gentler spring/hold, less heat, less risk of damage.
-    Higher value → stronger grip/hold, but more stress on the motor.
-
-    Servo model reference:
-      XC330-T288-T : 1 unit = 1.0 mA,  hardware max ≈ 1193 mA
-      XM430-W210-T : 1 unit = 2.69 mA, hardware max ≈ 1263 mA
-      XM540-W270-T : 1 unit = 2.69 mA, hardware max ≈ 2240 mA
-
-    A safe starting point is 200–400 mA for a light spring-back hold.
-    """
-
-    gripper_current_unit_ma: float = 1.0
-    """
-    mA per raw unit for the gripper servo model.
-    Match this to your servo:
-      XC330 → 1.0   XM430 / XM540 → 2.69   XH430 → 1.0
+    when the node starts.  The gripper servo is placed in
+    Current-based Position Control Mode (mode 5) and driven to this
+    setpoint so it springs back whenever the user releases it.
+    The current (torque) limit is configured in the servo's EEPROM
+    via Dynamixel Wizard — not set from code.
     """
 
 
@@ -154,12 +134,11 @@ PORT_CONFIG_MAP: Dict[str, GelloConfig] = {
         gripper_id=8,
         gripper_open_pos_deg=195.0,
         gripper_closed_pos_deg=152.0,
-        gripper_hold_pos_deg=175.0,        # ~midpoint; adjust to comfort
-        gripper_current_limit_ma=300.0,    # 300 mA → gentle spring-back
-        gripper_current_unit_ma=1.0,       # XC330: 1 mA/unit
+        gripper_hold_pos_deg=175.0,   # ~midpoint; adjust to comfort
         baudrate=57600,
         alpha=0.5,
     ),
+
 
 
     # ---------------------------------------------------------------------- #

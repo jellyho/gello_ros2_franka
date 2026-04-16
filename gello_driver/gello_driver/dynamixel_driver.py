@@ -22,40 +22,24 @@ import numpy as np
 # --------------------------------------------------------------------------- #
 # Dynamixel control-table addresses (X-series, Protocol 2.0)
 # --------------------------------------------------------------------------- #
-ADDR_OPERATING_MODE      = 11
-ADDR_CURRENT_LIMIT       = 38   # 2 bytes, EEPROM — write only when torque OFF
-LEN_CURRENT_LIMIT        = 2    # unit: depends on servo model (see docs below)
-ADDR_TORQUE_ENABLE       = 64
-ADDR_LED                 = 65   # 1 byte: 1 = on, 0 = off
-ADDR_GOAL_CURRENT        = 102
-LEN_GOAL_CURRENT         = 2
-ADDR_PRESENT_VELOCITY    = 128
-LEN_PRESENT_VELOCITY     = 4
-ADDR_PRESENT_POSITION    = 132
-LEN_PRESENT_POSITION     = 4
-ADDR_GOAL_POSITION       = 116
-LEN_GOAL_POSITION        = 4
+ADDR_OPERATING_MODE               = 11
+ADDR_TORQUE_ENABLE                = 64
+ADDR_LED                          = 65   # 1 byte: 1 = on, 0 = off
+ADDR_GOAL_CURRENT                 = 102
+LEN_GOAL_CURRENT                  = 2
+ADDR_PRESENT_VELOCITY             = 128
+LEN_PRESENT_VELOCITY              = 4
+ADDR_PRESENT_POSITION             = 132
+LEN_PRESENT_POSITION              = 4
+ADDR_GOAL_POSITION                = 116
+LEN_GOAL_POSITION                 = 4
 
-TORQUE_ENABLE            = 1
-TORQUE_DISABLE           = 0
-POSITION_CONTROL_MODE    = 3
-CURRENT_CONTROL_MODE     = 0
+TORQUE_ENABLE                     = 1
+TORQUE_DISABLE                    = 0
+POSITION_CONTROL_MODE             = 3
+CURRENT_BASED_POSITION_CTRL_MODE  = 5   # position + current-limit via Goal Current
+CURRENT_CONTROL_MODE              = 0
 
-# ---------------------------------------------------------------------------
-# Current unit per servo model (mA per raw unit)
-# ---------------------------------------------------------------------------
-# XC330-T288-T  : 1.0  mA / unit  (max 1193 units / ~1193 mA)
-# XC330-T181-T  : 1.0  mA / unit
-# XM430-W210-T  : 2.69 mA / unit  (max 1263 mA  ≈  469 units)
-# XM540-W150-T  : 2.69 mA / unit
-# XH430-V210-R  : 1.0  mA / unit
-# Use CURRENT_UNIT_MA to convert mA → raw unit when calling set_current_limit.
-CURRENT_UNIT_mA: dict = {
-    "XC330":  1.0,
-    "XM430":  2.69,
-    "XM540":  2.69,
-    "XH430":  1.0,
-}
 
 
 # --------------------------------------------------------------------------- #
@@ -90,15 +74,6 @@ class FakeDynamixelDriver:
 
     def set_led(self, enable: bool, ids: Optional[Sequence[int]] = None) -> None:
         """Turn LED on/off (fake: no-op)."""
-        pass
-
-    def set_current_limit_single(self, dxl_id: int, current_ma: float,
-                                  current_unit_ma: float = 1.0) -> None:
-        """
-        Limit the maximum current (= torque) for a single servo.
-        Torque must be DISABLED before calling (EEPROM register).
-        Fake driver: no-op.
-        """
         pass
 
     def set_goal_position_single(self, dxl_id: int, position_rad: float) -> None:
@@ -395,46 +370,6 @@ class DynamixelDriver:
                         f"[DynamixelDriver] set_led warning for ID {dxl_id}: "
                         f"res={res}, err={err}"
                     )
-
-    # --- current limit (torque cap) ---------------------------------------- #
-    def set_current_limit_single(
-        self,
-        dxl_id: int,
-        current_ma: float,
-        current_unit_ma: float = 1.0,
-    ) -> None:
-        """
-        Write the Current Limit register (addr 38) for a single servo.
-
-        This caps the maximum current output in any control mode, effectively
-        limiting the maximum torque the servo can exert.
-
-        IMPORTANT: This is an EEPROM register — torque must be DISABLED
-        before writing.  Call this before set_torque_mode_ids().
-
-        Parameters
-        ----------
-        dxl_id : int
-            Dynamixel servo ID.
-        current_ma : float
-            Desired maximum current in milliamperes (mA).
-        current_unit_ma : float
-            mA per raw unit for this servo model.
-            e.g. XC330 → 1.0,  XM430 → 2.69  (see CURRENT_UNIT_mA dict)
-        """
-        if self._is_fake:
-            return
-        raw = max(0, int(current_ma / current_unit_ma))
-        COMM_SUCCESS = self._dxl["COMM_SUCCESS"]
-        with self._lock:
-            res, err = self._packet_handler.write2ByteTxRx(
-                self._port_handler, dxl_id, ADDR_CURRENT_LIMIT, raw
-            )
-        if res != COMM_SUCCESS or err != 0:
-            raise RuntimeError(
-                f"set_current_limit_single failed for ID {dxl_id} "
-                f"(res={res}, err={err}, raw={raw})"
-            )
 
     # --- single-servo goal position ---------------------------------------- #
     def set_goal_position_single(self, dxl_id: int, position_rad: float) -> None:
