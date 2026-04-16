@@ -51,6 +51,27 @@ gello_node:
     # the user releases the trigger.  Adjust to the natural open/rest pose.
     gripper_hold: 175.0    # degrees — hold / rest position
 
+    # ---------------------------------------------------------------------------
+    # Gripper torque / current limit
+    # ---------------------------------------------------------------------------
+    # gripper_current_limit_ma caps the maximum current the gripper servo
+    # is allowed to draw.  Lower = gentler spring-back, less motor heat.
+    # Higher = stronger hold, but more stress on the motor.
+    #
+    # Typical safe range for a hold task: 200 – 500 mA
+    # Hardware maximums:
+    #   XC330-T288-T : ~1193 mA   (unit = 1.0 mA/raw)
+    #   XM430-W210-T : ~1263 mA   (unit = 2.69 mA/raw)
+    #   XM540-W270-T : ~2240 mA   (unit = 2.69 mA/raw)
+    #
+    # Set gripper_current_unit_ma to match your gripper servo model:
+    #   XC330 / XH430 → 1.0
+    #   XM430 / XM540 → 2.69
+    # ---------------------------------------------------------------------------
+    gripper_current_limit_ma: 300.0   # mA  — adjust to taste
+    gripper_current_unit_ma: 1.0      # mA per raw unit (XC330 default)
+
+
     # Smoothing (alpha=1.0 → raw, alpha→0 → very smooth/lagged)
     alpha: 0.5
 

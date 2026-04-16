@@ -101,7 +101,13 @@ class GelloNode(Node):
         self.declare_parameter("gripper_id", -1)          # -1 = no gripper
         self.declare_parameter("gripper_open", 195.0)     # degrees
         self.declare_parameter("gripper_closed", 152.0)   # degrees
-        self.declare_parameter("gripper_hold", 175.0)     # degrees — hold position for torque control
+        self.declare_parameter("gripper_hold", 175.0)     # degrees — hold / rest position
+        # Current limit: caps how hard the gripper motor fights back.
+        # Lower value = gentler spring, less motor heat.
+        # Set gripper_current_unit_ma to match your servo model:
+        #   XC330 → 1.0   |   XM430 / XM540 → 2.69   |   XH430 → 1.0
+        self.declare_parameter("gripper_current_limit_ma", 300.0)   # mA
+        self.declare_parameter("gripper_current_unit_ma", 1.0)      # mA / raw unit
         self.declare_parameter("alpha", 0.5)
         self.declare_parameter("publish_rate", 50.0)
         self.declare_parameter("use_fake_driver", False)
@@ -241,6 +247,8 @@ class GelloNode(Node):
             gripper_open_pos_deg=self.get_parameter("gripper_open").get_parameter_value().double_value,
             gripper_closed_pos_deg=self.get_parameter("gripper_closed").get_parameter_value().double_value,
             gripper_hold_pos_deg=self.get_parameter("gripper_hold").get_parameter_value().double_value,
+            gripper_current_limit_ma=self.get_parameter("gripper_current_limit_ma").get_parameter_value().double_value,
+            gripper_current_unit_ma=self.get_parameter("gripper_current_unit_ma").get_parameter_value().double_value,
             baudrate=self.get_parameter("baudrate").get_parameter_value().integer_value,
             alpha=self.get_parameter("alpha").get_parameter_value().double_value,
         )
@@ -269,21 +277,31 @@ class GelloNode(Node):
 
         gid = self._cfg.gripper_id
         hold_rad = math.radians(self._cfg.gripper_hold_pos_deg)
+        limit_ma = self._cfg.gripper_current_limit_ma
+        unit_ma  = self._cfg.gripper_current_unit_ma
 
         try:
-            # Step 1: set position control mode (torque must be off — it is)
+            # Step 1: cap current / torque (EEPROM — torque must be off)
+            self._driver.set_current_limit_single(gid, limit_ma, unit_ma)
+            raw_limit = max(0, int(limit_ma / unit_ma))
+            self.get_logger().info(
+                f"Gripper ID {gid}: current limit set to "
+                f"{limit_ma:.0f} mA (raw {raw_limit})."
+            )
+
+            # Step 2: set position control mode (torque still off)
             self._driver.set_operating_mode_ids([gid], POSITION_CONTROL_MODE)
             self.get_logger().info(
                 f"Gripper ID {gid}: operating mode → Position Control."
             )
 
-            # Step 2: enable torque for gripper only
+            # Step 3: enable torque for gripper only
             self._driver.set_torque_mode_ids([gid], True)
             self.get_logger().info(
                 f"Gripper ID {gid}: torque enabled."
             )
 
-            # Step 3: command hold position
+            # Step 4: command hold position
             self._driver.set_goal_position_single(gid, hold_rad)
             self.get_logger().info(
                 f"Gripper ID {gid}: hold position set to "
