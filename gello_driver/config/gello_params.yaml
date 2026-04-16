@@ -10,14 +10,14 @@
 gello_node:
   ros__parameters:
     # Serial port ─ prefer /dev/serial/by-id/... for stability
-    port: "/dev/ttyUSB0"
+    port: "/dev/serial/by-id/usb-FTDI_USB__-__Serial_Converter_FT763O2V-if00-port0"
     auto_detect_port: true
 
     # Dynamixel bus
-    baudrate: 57600
+    baudrate: 4000000
 
     # Servo IDs (arm joints only, not including gripper)
-    joint_ids: [1, 2, 3, 4, 5, 6, 7]
+    joint_ids: [0, 1, 2, 3, 4, 5, 6]
 
     # Per-joint offset (radians).  Adjust so that GELLO home = robot home.
     joint_offsets:
@@ -43,7 +43,7 @@ gello_node:
       - fr3_joint7
 
     # Gripper — set gripper_id to -1 to disable
-    gripper_id: 8
+    gripper_id: 7
     gripper_open: 195.0    # degrees — fully open encoder position
     gripper_closed: 152.0  # degrees — fully closed encoder position
     # The gripper servo is set to Current-based Position Control Mode (mode 5)

@@ -160,7 +160,7 @@ class GelloNode(Node):
         self._driver.set_led(True)                   # step 2: LEDs on
         self.get_logger().info("Motor LEDs activated.")
 
-        self._init_gripper()                         # steps 3 & 4
+        self._init_active_joints()                   # steps 3 & 4
 
         # ------------------------------------------------------------------ #
         # Internal state
@@ -248,54 +248,47 @@ class GelloNode(Node):
         return cfg
 
     # ----------------------------------------------------------------------- #
-    # Gripper initialisation
+    # Hardware initialization for active joints (Gripper + Shoulder)
     # ----------------------------------------------------------------------- #
 
-    def _init_gripper(self) -> None:
+    def _init_active_joints(self) -> None:
         """
-        Configure the gripper servo for position-control hold.
+        Configure active joints (Gripper and specified arm joints) for
+        Current-based Position Control Mode (Mode 5).
 
-        Sequence (torque must already be OFF for all servos):
-          1. Set gripper servo to Position Control Mode (operating mode = 3)
-          2. Enable torque for the gripper servo only
-          3. Command the hold position
-
-        Arm joints remain with torque OFF (passive / free-moving leader).
-        Gripper now acts like a spring: push it away, it returns to hold_pos.
+        Passive joints (rest of the arm) remain with torque OFF.
         """
-        if self._cfg.gripper_id is None:
-            self.get_logger().info("No gripper configured — arm joints torque off, ready.")
-            return
+        # --- 1. Shoulder Joint (Second from base, index 1) ---
+        # The user requested this joint to hold at 0 degrees.
+        if len(self._cfg.joint_ids) > 1:
+            sid = self._cfg.joint_ids[1]
+            # Offset corresponds to 0 degrees in GELLO space
+            hold_rad = self._cfg.joint_offsets[1]
+            try:
+                self._driver.set_operating_mode_ids([sid], CURRENT_BASED_POSITION_CTRL_MODE)
+                self._driver.set_torque_mode_ids([sid], True)
+                self._driver.set_goal_position_single(sid, hold_rad)
+                self.get_logger().info(
+                    f"Arm Joint ID {sid} (Shoulder): Mode 5 ON, holding at 0° (raw offset)."
+                )
+            except Exception as exc:
+                self.get_logger().error(f"Failed to init shoulder joint ID {sid}: {exc}")
 
-        gid = self._cfg.gripper_id
-        hold_rad = math.radians(self._cfg.gripper_hold_pos_deg)
-
-        try:
-            # Step 1: set Current-based Position Control Mode
-            #         (mode 5, torque must be off — it is)
-            #         Current limit is already set in EEPROM via Dynamixel Wizard.
-            self._driver.set_operating_mode_ids([gid], CURRENT_BASED_POSITION_CTRL_MODE)
-            self.get_logger().info(
-                f"Gripper ID {gid}: operating mode → Current-based Position Control (5)."
-            )
-
-            # Step 2: enable torque for gripper only
-            self._driver.set_torque_mode_ids([gid], True)
-            self.get_logger().info(
-                f"Gripper ID {gid}: torque enabled."
-            )
-
-            # Step 3: command hold position
-            self._driver.set_goal_position_single(gid, hold_rad)
-            self.get_logger().info(
-                f"Gripper ID {gid}: hold position set to "
-                f"{self._cfg.gripper_hold_pos_deg:.1f}° ({hold_rad:.3f} rad)."
-            )
-        except Exception as exc:
-            self.get_logger().error(
-                f"Gripper init failed for ID {gid}: {exc}  "
-                "(continuing without gripper torque)"
-            )
+        # --- 2. Gripper ---
+        if self._cfg.gripper_id is not None:
+            gid = self._cfg.gripper_id
+            hold_rad = math.radians(self._cfg.gripper_hold_pos_deg)
+            try:
+                self._driver.set_operating_mode_ids([gid], CURRENT_BASED_POSITION_CTRL_MODE)
+                self._driver.set_torque_mode_ids([gid], True)
+                self._driver.set_goal_position_single(gid, hold_rad)
+                self.get_logger().info(
+                    f"Gripper ID {gid}: Mode 5 ON, holding at {self._cfg.gripper_hold_pos_deg:.1f}°."
+                )
+            except Exception as exc:
+                self.get_logger().error(f"Failed to init gripper ID {gid}: {exc}")
+        else:
+            self.get_logger().info("No gripper configured.")
 
     # ----------------------------------------------------------------------- #
     # Timer callback

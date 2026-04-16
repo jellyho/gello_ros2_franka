@@ -119,8 +119,8 @@ PORT_CONFIG_MAP: Dict[str, GelloConfig] = {
     # Franka FR3 / Panda  (7-DOF)
     # Replace the key with your actual by-id path.
     # ---------------------------------------------------------------------- #
-    "/dev/serial/by-id/usb-FTDI_USB__-__Serial_Converter_FT3M9NVB-if00-port0": GelloConfig(
-        joint_ids=[1, 2, 3, 4, 5, 6, 7],
+    "/dev/serial/by-id/usb-FTDI_USB__-__Serial_Converter_FT763O2V-if00-port0": GelloConfig(
+        joint_ids=[0, 1, 2, 3, 4, 5, 6],
         joint_offsets=[
             3 * _π / 2,
             2 * _π / 2,
@@ -131,33 +131,11 @@ PORT_CONFIG_MAP: Dict[str, GelloConfig] = {
             4 * _π / 2,
         ],
         joint_signs=[1, -1, 1, 1, 1, -1, 1],
-        gripper_id=8,
-        gripper_open_pos_deg=195.0,
-        gripper_closed_pos_deg=152.0,
-        gripper_hold_pos_deg=175.0,   # ~midpoint; adjust to comfort
-        baudrate=57600,
+        gripper_id=7,
+        gripper_open_pos_deg=90.0,
+        gripper_closed_pos_deg=75.0,
+        gripper_hold_pos_deg=100.0,   # ~midpoint; adjust to comfort
+        baudrate=4000000, # 4Mbps
         alpha=0.5,
     ),
-
-
-
-    # ---------------------------------------------------------------------- #
-    # Example: 6-DOF GELLO for UR / generic arm
-    # ---------------------------------------------------------------------- #
-    # "/dev/serial/by-id/usb-FTDI_USB__-__Serial_Converter_FT7WBEIA-if00-port0": GelloConfig(
-    #     joint_ids=[1, 2, 3, 4, 5, 6],
-    #     joint_offsets=[
-    #         0,
-    #         1 * _π / 2 + _π,
-    #         _π / 2,
-    #         _π / 2,
-    #         _π - 2 * _π / 2,
-    #         -1 * _π / 2 + 2 * _π,
-    #     ],
-    #     joint_signs=[1, 1, -1, 1, 1, 1],
-    #     gripper_id=7,
-    #     gripper_open_pos_deg=20.0,
-    #     gripper_closed_pos_deg=-22.0,
-    #     baudrate=57600,
-    # ),
 }
