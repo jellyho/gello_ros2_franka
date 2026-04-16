@@ -15,8 +15,8 @@ install/
 log/
 .ros/
 
-# MuJoCo downloaded assets (regenerated on first run)
-franka_mujoco_receiver/assets/
+# # MuJoCo downloaded assets (regenerated on first run)
+# franka_mujoco_receiver/assets/
 
 # Virtual environments
 .venv/

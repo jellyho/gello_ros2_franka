@@ -18,7 +18,7 @@ def generate_launch_description() -> LaunchDescription:
         ),
         DeclareLaunchArgument(
             "step_rate",
-            default_value="50.0",
+            default_value="500.0",
             description="Physics / viewer update rate (Hz)",
         ),
         Node(
@@ -31,13 +31,13 @@ def generate_launch_description() -> LaunchDescription:
                     "xml_path": LaunchConfiguration("xml_path"),
                     "step_rate": LaunchConfiguration("step_rate"),
                     "joint_names_mj": [
-                        "joint1",
-                        "joint2",
-                        "joint3",
-                        "joint4",
-                        "joint5",
-                        "joint6",
-                        "joint7",
+                        "fr3_joint1",
+                        "fr3_joint2",
+                        "fr3_joint3",
+                        "fr3_joint4",
+                        "fr3_joint5",
+                        "fr3_joint6",
+                        "fr3_joint7",
                     ],
                 }
             ],

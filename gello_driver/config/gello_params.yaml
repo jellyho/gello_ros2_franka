@@ -15,18 +15,13 @@ gello_node:
     # Servo IDs (arm joints only, not including gripper)
     joint_ids: [0, 1, 2, 3, 4, 5, 6]
 
-    # Per-joint offset (radians).  Adjust so that GELLO home = robot home.
-    joint_offsets:
-      - 4.71238898038   # 3π/2
-      - 3.14159265359   # 2π/2
-      - 1.57079632679   # 1π/2
-      - 6.28318530718   # 4π/2
-      - 3.14159265359   # -2π/2 + 2π = π
-      - 4.71238898038   # 3π/2
-      - 6.28318530718   # 4π/2
+    # Per-joint offset (degrees).  Adjust so that GELLO home = robot home.
+    joint_offsets: [270.0, 360.0, 90.0, 360.0, 0.0, 90.0, 360.0]
 
     # Per-joint sign correction (+1 or -1)
-    joint_signs: [1, 1, 1, 1, 1, -1, 1]
+    joint_signs: [1, -1, 1, 1, 1, 1, 1]
+
+    # 0.006373619195073843, -0.5890147686004639, -0.004475977271795273, -2.5005664825439453, 0.012818682938814163, 1.8703837394714355, 0.015181359834969044
 
     # Published joint names (must match the robot URDF)
     joint_names:
@@ -40,8 +35,8 @@ gello_node:
 
     # Gripper — set gripper_id to -1 to disable
     gripper_id: 7
-    gripper_open: 90    # degrees — fully open encoder position
-    gripper_closed: 75  # degrees — fully closed encoder position
+    gripper_open: 90.0    # degrees — fully open encoder position
+    gripper_closed: 75.0  # degrees — fully closed encoder position
     # The gripper servo is set to Current-based Position Control Mode (mode 5)
     # at startup and driven to gripper_hold.  It will spring back to this angle
     # whenever the user releases the trigger.

@@ -86,15 +86,7 @@ class GelloNode(Node):
         self.declare_parameter("port", "/dev/ttyUSB0")
         self.declare_parameter("baudrate", 57600)
         self.declare_parameter("joint_ids", [1, 2, 3, 4, 5, 6, 7])
-        self.declare_parameter("joint_offsets", [
-            3 * math.pi / 2,
-            2 * math.pi / 2,
-            1 * math.pi / 2,
-            4 * math.pi / 2,
-            -2 * math.pi / 2 + 2 * math.pi,
-            3 * math.pi / 2,
-            4 * math.pi / 2,
-        ])
+        self.declare_parameter("joint_offsets", [270.0, 180.0, 90.0, 360.0, 180.0, 270.0, 360.0])  # in degrees
         self.declare_parameter("joint_signs", [1, -1, 1, 1, 1, -1, 1])
         self.declare_parameter("joint_names", FRANKA_JOINT_NAMES)
         self.declare_parameter("gripper_id", -1)          # -1 = no gripper
@@ -125,9 +117,9 @@ class GelloNode(Node):
         self._joint_ids = list(
             self.get_parameter("joint_ids").get_parameter_value().integer_array_value
         )
-        self._joint_offsets = np.array(
-            self.get_parameter("joint_offsets").get_parameter_value().double_array_value
-        )
+        # Load joint offsets in degrees and convert to radians
+        joint_offsets_deg = self.get_parameter("joint_offsets").get_parameter_value().double_array_value
+        self._joint_offsets = np.radians(joint_offsets_deg)
         self._joint_signs = np.array([
             int(s)
             for s in self.get_parameter("joint_signs").get_parameter_value().integer_array_value
@@ -218,8 +210,20 @@ class GelloNode(Node):
         """
         Configure active joints for Current-based Position Control Mode (Mode 5).
         """
-        # --- 1. Shoulder Joint (Second from base, index 1) ---
+        # --- 1. Base and Shoulder Joint (Second from base, index 1) ---
         if len(self._joint_ids) > 1:
+            sid = self._joint_ids[0]
+            hold_rad = self._joint_offsets[0]
+            try:
+                self._driver.set_operating_mode_ids([sid], CURRENT_BASED_POSITION_CTRL_MODE)
+                self._driver.set_torque_mode_ids([sid], True)
+                self._driver.set_goal_position_single(sid, hold_rad)
+                self.get_logger().info(
+                    f"Arm Joint ID {sid} (Base): Mode 5 ON, holding at {math.degrees(hold_rad)}°."
+                )
+            except Exception as exc:
+                self.get_logger().error(f"Failed to init shoulder joint ID {sid}: {exc}")
+
             sid = self._joint_ids[1]
             hold_rad = self._joint_offsets[1]
             try:
@@ -227,7 +231,7 @@ class GelloNode(Node):
                 self._driver.set_torque_mode_ids([sid], True)
                 self._driver.set_goal_position_single(sid, hold_rad)
                 self.get_logger().info(
-                    f"Arm Joint ID {sid} (Shoulder): Mode 5 ON, holding at 0°."
+                    f"Arm Joint ID {sid} (Shoulder): Mode 5 ON, holding at {math.degrees(hold_rad)}°."
                 )
             except Exception as exc:
                 self.get_logger().error(f"Failed to init shoulder joint ID {sid}: {exc}")

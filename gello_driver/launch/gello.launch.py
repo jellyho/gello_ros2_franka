@@ -31,7 +31,7 @@ def generate_launch_description() -> LaunchDescription:
         ),
         DeclareLaunchArgument(
             "gpio_enabled",
-            default_value="false",
+            default_value="true",
             description="Enable GPIO switch monitoring (Jetson Orin Nano)",
         ),
         Node(

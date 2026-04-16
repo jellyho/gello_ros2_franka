@@ -1,5 +1,6 @@
 """franka_mujoco_receiver ROS 2 package setup."""
 
+from pathlib import Path
 from setuptools import find_packages, setup
 
 package_name = "franka_mujoco_receiver"
@@ -14,6 +15,11 @@ setup(
         (f"share/{package_name}", ["package.xml"]),
         (f"share/{package_name}/launch",
          ["launch/mujoco_receiver.launch.py"]),
+        # Include all asset files recursively (XML, STL, OBJ, md)
+        (f"share/{package_name}/assets/franka_fr3", 
+         ["assets/franka_fr3/fr3.xml", "assets/franka_fr3/scene.xml", "assets/franka_fr3/fr3.png"]),
+        (f"share/{package_name}/assets/franka_fr3/assets",
+         [str(p) for p in Path("assets/franka_fr3/assets").glob("*") if p.is_file()]),
     ],
     install_requires=["setuptools"],
     zip_safe=True,
