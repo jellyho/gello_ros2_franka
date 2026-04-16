@@ -1,5 +1,3 @@
-import math
-
 # ---------------------------------------------------------------------------
 # gello_driver default parameters
 # ---------------------------------------------------------------------------
@@ -57,3 +55,39 @@ gello_node:
 
     # Set to true to run without hardware (for testing)
     use_fake_driver: false
+
+    # ---------------------------------------------------------------------------
+    # GPIO Switches (Jetson Orin Nano)
+    # ---------------------------------------------------------------------------
+    # Hardware assumption: each pin is pulled HIGH via an external resistor.
+    #   - Switch open (not pressed) : pin = HIGH
+    #   - Switch closed (pressed)   : pin = LOW
+    #   - Rising edge               : LOW → HIGH  = button release event
+    #
+    # gpio_enabled      : set to true to activate GPIO monitoring
+    # gpio_pin_mode     : 'BOARD' = physical 40-pin header numbers (recommended)
+    #                     'BCM'   = Broadcom GPIO numbers
+    # gpio_bouncetime_ms: debounce window in milliseconds (default 50)
+    # gpio_pins         : list of physical pin numbers, one per switch
+    # gpio_topic_names  : list of ROS 2 topic names, one per switch
+    #
+    # gpio_pins and gpio_topic_names MUST have the same length.
+    #
+    # Jetson Orin Nano 40-pin header — frequently usable GPIO pins (BOARD):
+    #   Pin  7 → GPIO09  /  Pin 11 → GPIO17  /  Pin 13 → GPIO27
+    #   Pin 15 → GPIO22  /  Pin 29 → GPIO05  /  Pin 31 → GPIO06
+    # ---------------------------------------------------------------------------
+    gpio_enabled: false
+
+    gpio_pin_mode: "BOARD"
+    gpio_bouncetime_ms: 50
+
+    # Physical (BOARD) pin numbers for the three switches
+    gpio_pins: [7, 11, 13]
+
+    # ROS 2 topic names published on rising edge (std_msgs/Bool, data=true)
+    gpio_topic_names:
+      - "/gello/switch/record"
+      - "/gello/switch/reset"
+      - "/gello/switch/stop"
+

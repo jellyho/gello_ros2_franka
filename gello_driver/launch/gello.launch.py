@@ -29,6 +29,11 @@ def generate_launch_description() -> LaunchDescription:
             default_value="false",
             description="Use fake Dynamixel driver (no hardware)",
         ),
+        DeclareLaunchArgument(
+            "gpio_enabled",
+            default_value="false",
+            description="Enable GPIO switch monitoring (Jetson Orin Nano)",
+        ),
         Node(
             package="gello_driver",
             executable="gello_node",
@@ -39,6 +44,7 @@ def generate_launch_description() -> LaunchDescription:
                 {
                     "port": LaunchConfiguration("port"),
                     "use_fake_driver": LaunchConfiguration("use_fake_driver"),
+                    "gpio_enabled": LaunchConfiguration("gpio_enabled"),
                 },
             ],
         ),

@@ -2,6 +2,10 @@
 gello_node.py — ROS 2 node: reads GELLO Dynamixel servos and publishes
 joint commands on /gello/joint_command (sensor_msgs/JointState).
 
+Also monitors up to N GPIO pins (Jetson Orin Nano) with hardware pull-up
+resistors for rising-edge events and publishes std_msgs/Bool on
+per-switch configurable topics.
+
 Usage
 -----
 # Via launch file (recommended):
@@ -14,16 +18,19 @@ ros2 run gello_driver gello_node
 from __future__ import annotations
 
 import math
-from typing import List, Optional
+import threading
+from typing import Dict, List, Optional
 
 import numpy as np
 import rclpy
 from rclpy.executors import ExternalShutdownException
 from rclpy.node import Node
 from sensor_msgs.msg import JointState
+from std_msgs.msg import Bool
 
 from gello_driver.config import PORT_CONFIG_MAP, GelloConfig
 from gello_driver.dynamixel_driver import DynamixelDriver, FakeDynamixelDriver
+from gello_driver.gpio_switch_handler import GpioSwitchHandler
 
 
 # Default joint names for a 7-DOF Franka FR3 / Panda
@@ -44,19 +51,27 @@ class GelloNode(Node):
 
     Parameters (declared as ROS 2 params, can be set in YAML or CLI)
     ----------
-    port            : str   — serial device path
-    baudrate        : int   — Dynamixel baudrate
-    joint_ids       : list  — servo IDs (arm joints only)
-    joint_offsets   : list  — per-joint offset (rad)
-    joint_signs     : list  — per-joint sign (+1 or -1)
-    joint_names     : list  — joint names for the published JointState
-    gripper_id      : int   — gripper servo ID (-1 = no gripper)
-    gripper_open    : float — gripper open position (deg)
-    gripper_closed  : float — gripper closed position (deg)
-    alpha           : float — smoothing factor (0–1; 1 = no smoothing)
-    publish_rate    : float — Hz
-    use_fake_driver : bool  — use fake driver (no hardware required)
-    auto_detect_port: bool  — look up port in PORT_CONFIG_MAP
+    port              : str   — serial device path
+    baudrate          : int   — Dynamixel baudrate
+    joint_ids         : list  — servo IDs (arm joints only)
+    joint_offsets     : list  — per-joint offset (rad)
+    joint_signs       : list  — per-joint sign (+1 or -1)
+    joint_names       : list  — joint names for the published JointState
+    gripper_id        : int   — gripper servo ID (-1 = no gripper)
+    gripper_open      : float — gripper open position (deg)
+    gripper_closed    : float — gripper closed position (deg)
+    alpha             : float — smoothing factor (0–1; 1 = no smoothing)
+    publish_rate      : float — Hz
+    use_fake_driver   : bool  — use fake driver (no hardware required)
+    auto_detect_port  : bool  — look up port in PORT_CONFIG_MAP
+
+    GPIO switch parameters
+    ----------------------
+    gpio_enabled      : bool  — enable GPIO switch monitoring (default False)
+    gpio_pin_mode     : str   — 'BOARD' (physical) or 'BCM'
+    gpio_bouncetime_ms: int   — debounce time in milliseconds
+    gpio_pins         : list  — BOARD pin numbers for switches [sw0, sw1, sw2]
+    gpio_topic_names  : list  — ROS 2 topic names for each switch event
     """
 
     def __init__(self) -> None:
@@ -86,6 +101,18 @@ class GelloNode(Node):
         self.declare_parameter("publish_rate", 50.0)
         self.declare_parameter("use_fake_driver", False)
         self.declare_parameter("auto_detect_port", True)
+
+        # GPIO switches
+        self.declare_parameter("gpio_enabled", False)
+        self.declare_parameter("gpio_pin_mode", "BOARD")
+        self.declare_parameter("gpio_bouncetime_ms", 50)
+        # Default: three pins commonly available on Jetson Orin Nano 40-pin header
+        self.declare_parameter("gpio_pins", [7, 11, 13])
+        self.declare_parameter("gpio_topic_names", [
+            "/gello/switch/0",
+            "/gello/switch/1",
+            "/gello/switch/2",
+        ])
 
         # ------------------------------------------------------------------ #
         # Resolve configuration
@@ -130,7 +157,7 @@ class GelloNode(Node):
         )
 
         # ------------------------------------------------------------------ #
-        # Publisher
+        # JointCommand publisher
         # ------------------------------------------------------------------ #
         self._pub = self.create_publisher(JointState, "/gello/joint_command", 10)
 
@@ -140,6 +167,18 @@ class GelloNode(Node):
         self.get_logger().info(
             f"GelloNode started — publishing at {rate:.0f} Hz on /gello/joint_command"
         )
+
+        # ------------------------------------------------------------------ #
+        # GPIO switch publishers + handler
+        # ------------------------------------------------------------------ #
+        self._switch_pubs: Dict[str, rclpy.publisher.Publisher] = {}
+        self._gpio_handler: Optional[GpioSwitchHandler] = None
+        self._gpio_pub_lock = threading.Lock()
+
+        if self.get_parameter("gpio_enabled").get_parameter_value().bool_value:
+            self._setup_gpio()
+        else:
+            self.get_logger().info("GPIO switches disabled (gpio_enabled=false).")
 
     # ----------------------------------------------------------------------- #
     # Config resolution
@@ -236,10 +275,71 @@ class GelloNode(Node):
         self._pub.publish(msg)
 
     # ----------------------------------------------------------------------- #
+    # GPIO setup
+    # ----------------------------------------------------------------------- #
+
+    def _setup_gpio(self) -> None:
+        gpio_pins = list(
+            self.get_parameter("gpio_pins").get_parameter_value().integer_array_value
+        )
+        gpio_topics = list(
+            self.get_parameter("gpio_topic_names").get_parameter_value().string_array_value
+        )
+
+        if len(gpio_pins) != len(gpio_topics):
+            self.get_logger().error(
+                f"gpio_pins ({len(gpio_pins)}) and gpio_topic_names "
+                f"({len(gpio_topics)}) must have the same length. "
+                "GPIO switches will NOT be set up."
+            )
+            return
+
+        # Create one Bool publisher per switch topic
+        for topic in gpio_topics:
+            self._switch_pubs[topic] = self.create_publisher(Bool, topic, 10)
+            self.get_logger().info(f"GPIO switch publisher: {topic}")
+
+        pin_configs = list(zip(gpio_pins, gpio_topics))
+        pin_mode = (
+            self.get_parameter("gpio_pin_mode").get_parameter_value().string_value
+        )
+        bouncetime = (
+            self.get_parameter("gpio_bouncetime_ms").get_parameter_value().integer_value
+        )
+
+        self._gpio_handler = GpioSwitchHandler(
+            pin_configs=pin_configs,
+            callback=self._gpio_edge_cb,
+            pin_mode=pin_mode,
+            bouncetime_ms=bouncetime,
+            logger=self.get_logger(),
+        )
+
+    def _gpio_edge_cb(self, topic_name: str) -> None:
+        """
+        Called from a GPIO interrupt thread when a rising edge fires.
+        Publishes Bool(True) on the corresponding topic.
+
+        Note: GPIO callbacks run in a C-level thread that is NOT the ROS 2
+        executor thread.  Publishing from here is safe in rclpy because
+        the publisher is thread-safe, but we guard with a lock to be tidy.
+        """
+        with self._gpio_pub_lock:
+            pub = self._switch_pubs.get(topic_name)
+            if pub is None:
+                return
+            msg = Bool()
+            msg.data = True
+            pub.publish(msg)
+        self.get_logger().info(f"GPIO rising edge → published on {topic_name}")
+
+    # ----------------------------------------------------------------------- #
     # Cleanup
     # ----------------------------------------------------------------------- #
 
     def destroy_node(self) -> None:
+        if self._gpio_handler is not None:
+            self._gpio_handler.cleanup()
         self._driver.close()
         super().destroy_node()
 
