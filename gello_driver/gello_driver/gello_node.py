@@ -29,7 +29,11 @@ from sensor_msgs.msg import JointState
 from std_msgs.msg import Bool
 
 from gello_driver.config import PORT_CONFIG_MAP, GelloConfig
-from gello_driver.dynamixel_driver import DynamixelDriver, FakeDynamixelDriver
+from gello_driver.dynamixel_driver import (
+    DynamixelDriver,
+    FakeDynamixelDriver,
+    POSITION_CONTROL_MODE,
+)
 from gello_driver.gpio_switch_handler import GpioSwitchHandler
 
 
@@ -97,6 +101,7 @@ class GelloNode(Node):
         self.declare_parameter("gripper_id", -1)          # -1 = no gripper
         self.declare_parameter("gripper_open", 195.0)     # degrees
         self.declare_parameter("gripper_closed", 152.0)   # degrees
+        self.declare_parameter("gripper_hold", 175.0)     # degrees — hold position for torque control
         self.declare_parameter("alpha", 0.5)
         self.declare_parameter("publish_rate", 50.0)
         self.declare_parameter("use_fake_driver", False)
@@ -143,7 +148,19 @@ class GelloNode(Node):
             else:
                 self.get_logger().info("Dynamixel driver initialised on real hardware.")
 
-        self._driver.set_torque_mode(False)  # GELLO = leader, torque off
+        # ------------------------------------------------------------------ #
+        # Startup hardware sequence
+        # ──────────────────────────────────────────────────────────────────
+        # 1. Ensure ALL motors torque-off (required to change operating mode)
+        # 2. Turn on LEDs for all motors  (visual feedback)
+        # 3. Arm joints: stay torque-off  (GELLO = passive leader)
+        # 4. Gripper:   position-control mode → torque on → hold position
+        # ------------------------------------------------------------------ #
+        self._driver.set_torque_mode(False)          # step 1: all off
+        self._driver.set_led(True)                   # step 2: LEDs on
+        self.get_logger().info("Motor LEDs activated.")
+
+        self._init_gripper()                         # steps 3 & 4
 
         # ------------------------------------------------------------------ #
         # Internal state
@@ -223,11 +240,60 @@ class GelloNode(Node):
             gripper_id=gripper_id,
             gripper_open_pos_deg=self.get_parameter("gripper_open").get_parameter_value().double_value,
             gripper_closed_pos_deg=self.get_parameter("gripper_closed").get_parameter_value().double_value,
+            gripper_hold_pos_deg=self.get_parameter("gripper_hold").get_parameter_value().double_value,
             baudrate=self.get_parameter("baudrate").get_parameter_value().integer_value,
             alpha=self.get_parameter("alpha").get_parameter_value().double_value,
         )
         cfg.__dict__["port"] = port
         return cfg
+
+    # ----------------------------------------------------------------------- #
+    # Gripper initialisation
+    # ----------------------------------------------------------------------- #
+
+    def _init_gripper(self) -> None:
+        """
+        Configure the gripper servo for position-control hold.
+
+        Sequence (torque must already be OFF for all servos):
+          1. Set gripper servo to Position Control Mode (operating mode = 3)
+          2. Enable torque for the gripper servo only
+          3. Command the hold position
+
+        Arm joints remain with torque OFF (passive / free-moving leader).
+        Gripper now acts like a spring: push it away, it returns to hold_pos.
+        """
+        if self._cfg.gripper_id is None:
+            self.get_logger().info("No gripper configured — arm joints torque off, ready.")
+            return
+
+        gid = self._cfg.gripper_id
+        hold_rad = math.radians(self._cfg.gripper_hold_pos_deg)
+
+        try:
+            # Step 1: set position control mode (torque must be off — it is)
+            self._driver.set_operating_mode_ids([gid], POSITION_CONTROL_MODE)
+            self.get_logger().info(
+                f"Gripper ID {gid}: operating mode → Position Control."
+            )
+
+            # Step 2: enable torque for gripper only
+            self._driver.set_torque_mode_ids([gid], True)
+            self.get_logger().info(
+                f"Gripper ID {gid}: torque enabled."
+            )
+
+            # Step 3: command hold position
+            self._driver.set_goal_position_single(gid, hold_rad)
+            self.get_logger().info(
+                f"Gripper ID {gid}: hold position set to "
+                f"{self._cfg.gripper_hold_pos_deg:.1f}° ({hold_rad:.3f} rad)."
+            )
+        except Exception as exc:
+            self.get_logger().error(
+                f"Gripper init failed for ID {gid}: {exc}  "
+                "(continuing without gripper torque)"
+            )
 
     # ----------------------------------------------------------------------- #
     # Timer callback
@@ -338,6 +404,17 @@ class GelloNode(Node):
     # ----------------------------------------------------------------------- #
 
     def destroy_node(self) -> None:
+        # Disable gripper torque before closing
+        if self._cfg.gripper_id is not None:
+            try:
+                self._driver.set_torque_mode_ids([self._cfg.gripper_id], False)
+            except Exception:
+                pass
+        # Turn off all LEDs
+        try:
+            self._driver.set_led(False)
+        except Exception:
+            pass
         if self._gpio_handler is not None:
             self._gpio_handler.cleanup()
         self._driver.close()

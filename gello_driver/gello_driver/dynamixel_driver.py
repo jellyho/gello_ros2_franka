@@ -24,6 +24,7 @@ import numpy as np
 # --------------------------------------------------------------------------- #
 ADDR_OPERATING_MODE      = 11
 ADDR_TORQUE_ENABLE       = 64
+ADDR_LED                 = 65   # 1 byte: 1 = on, 0 = off
 ADDR_GOAL_CURRENT        = 102
 LEN_GOAL_CURRENT         = 2
 ADDR_PRESENT_VELOCITY    = 128
@@ -60,6 +61,22 @@ class FakeDynamixelDriver:
     # --- public API -------------------------------------------------------- #
     def set_torque_mode(self, enable: bool) -> None:
         self._torque_enabled = enable
+
+    def set_torque_mode_ids(self, ids: Sequence[int], enable: bool) -> None:
+        """Set torque enable for specific servo IDs (fake: no-op)."""
+        pass
+
+    def set_operating_mode_ids(self, ids: Sequence[int], mode: int) -> None:
+        """Set operating mode for specific servo IDs (fake: no-op)."""
+        pass
+
+    def set_led(self, enable: bool, ids: Optional[Sequence[int]] = None) -> None:
+        """Turn LED on/off (fake: no-op)."""
+        pass
+
+    def set_goal_position_single(self, dxl_id: int, position_rad: float) -> None:
+        """Set goal position for a single servo in radians (fake: no-op)."""
+        pass
 
     def torque_enabled(self) -> bool:
         return self._torque_enabled
@@ -285,22 +302,98 @@ class DynamixelDriver:
 
     # --- torque ------------------------------------------------------------ #
     def set_torque_mode(self, enable: bool) -> None:
+        """Set torque enable for ALL managed servo IDs."""
         if self._is_fake:
             self._torque_enabled = enable
+            return
+        self.set_torque_mode_ids(self._ids, enable)
+        self._torque_enabled = enable
+
+    def set_torque_mode_ids(self, ids: Sequence[int], enable: bool) -> None:
+        """Set torque enable for a specific subset of servo IDs."""
+        if self._is_fake:
             return
         COMM_SUCCESS = self._dxl["COMM_SUCCESS"]
         val = TORQUE_ENABLE if enable else TORQUE_DISABLE
         with self._lock:
-            for dxl_id in self._ids:
+            for dxl_id in ids:
                 res, err = self._packet_handler.write1ByteTxRx(
                     self._port_handler, dxl_id, ADDR_TORQUE_ENABLE, val
                 )
                 if res != COMM_SUCCESS or err != 0:
                     raise RuntimeError(
-                        f"set_torque_mode failed for ID {dxl_id} "
+                        f"set_torque_mode_ids failed for ID {dxl_id} "
                         f"(res={res}, err={err})"
                     )
-        self._torque_enabled = enable
+
+    def set_operating_mode_ids(self, ids: Sequence[int], mode: int) -> None:
+        """
+        Set operating mode for a subset of servo IDs.
+        IMPORTANT: torque must be DISABLED before calling this.
+        """
+        if self._is_fake:
+            return
+        COMM_SUCCESS = self._dxl["COMM_SUCCESS"]
+        with self._lock:
+            for dxl_id in ids:
+                res, err = self._packet_handler.write1ByteTxRx(
+                    self._port_handler, dxl_id, ADDR_OPERATING_MODE, mode
+                )
+                if res != COMM_SUCCESS or err != 0:
+                    raise RuntimeError(
+                        f"set_operating_mode_ids failed for ID {dxl_id} "
+                        f"(res={res}, err={err})"
+                    )
+
+    # --- LED --------------------------------------------------------------- #
+    def set_led(self, enable: bool, ids: Optional[Sequence[int]] = None) -> None:
+        """
+        Turn LED on (True) or off (False) for the given IDs.
+        If ids is None, applies to all managed IDs.
+        LED can be set regardless of torque state.
+        """
+        if self._is_fake:
+            return
+        COMM_SUCCESS = self._dxl["COMM_SUCCESS"]
+        target_ids = self._ids if ids is None else list(ids)
+        val = 1 if enable else 0
+        with self._lock:
+            for dxl_id in target_ids:
+                res, err = self._packet_handler.write1ByteTxRx(
+                    self._port_handler, dxl_id, ADDR_LED, val
+                )
+                if res != COMM_SUCCESS or err != 0:
+                    # Non-fatal: log but don't raise
+                    print(
+                        f"[DynamixelDriver] set_led warning for ID {dxl_id}: "
+                        f"res={res}, err={err}"
+                    )
+
+    # --- single-servo goal position ---------------------------------------- #
+    def set_goal_position_single(self, dxl_id: int, position_rad: float) -> None:
+        """
+        Write a goal position (radians) to a single servo.
+        Torque must be enabled for that servo beforehand.
+        """
+        if self._is_fake:
+            return
+        dxl = self._dxl
+        val = int(position_rad * 2048.0 / np.pi)
+        param = [
+            dxl["DXL_LOBYTE"](dxl["DXL_LOWORD"](val)),
+            dxl["DXL_HIBYTE"](dxl["DXL_LOWORD"](val)),
+            dxl["DXL_LOBYTE"](dxl["DXL_HIWORD"](val)),
+            dxl["DXL_HIBYTE"](dxl["DXL_HIWORD"](val)),
+        ]
+        with self._lock:
+            res, err = self._packet_handler.write4ByteTxRx(
+                self._port_handler, dxl_id, ADDR_GOAL_POSITION, val
+            )
+        if res != dxl["COMM_SUCCESS"] or err != 0:
+            raise RuntimeError(
+                f"set_goal_position_single failed for ID {dxl_id} "
+                f"(res={res}, err={err})"
+            )
 
     def torque_enabled(self) -> bool:
         return self._torque_enabled

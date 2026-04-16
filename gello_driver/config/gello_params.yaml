@@ -44,8 +44,12 @@ gello_node:
 
     # Gripper — set gripper_id to -1 to disable
     gripper_id: 8
-    gripper_open: 195.0    # degrees
-    gripper_closed: 152.0  # degrees
+    gripper_open: 195.0    # degrees — fully open encoder position
+    gripper_closed: 152.0  # degrees — fully closed encoder position
+    # Hold position: gripper servo is placed in Position Control mode and
+    # driven to this angle at startup.  It will spring back here whenever
+    # the user releases the trigger.  Adjust to the natural open/rest pose.
+    gripper_hold: 175.0    # degrees — hold / rest position
 
     # Smoothing (alpha=1.0 → raw, alpha→0 → very smooth/lagged)
     alpha: 0.5

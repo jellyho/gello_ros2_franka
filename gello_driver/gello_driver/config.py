@@ -45,6 +45,14 @@ class GelloConfig:
     gripper_closed_pos_deg: float = 0.0
     """Dynamixel position (degrees) that corresponds to fully closed."""
 
+    gripper_hold_pos_deg: float = 0.0
+    """
+    Dynamixel position (degrees) to hold with position-control torque
+    when the node starts.  The gripper servo is placed in Position
+    Control Mode and driven to this setpoint so it springs back whenever
+    the user releases it.  Typically the midpoint or natural open pose.
+    """
+
     # ------------------------------------------------------------------ #
     # Communication
     # ------------------------------------------------------------------ #
@@ -123,6 +131,7 @@ PORT_CONFIG_MAP: Dict[str, GelloConfig] = {
         gripper_id=8,
         gripper_open_pos_deg=195.0,
         gripper_closed_pos_deg=152.0,
+        gripper_hold_pos_deg=175.0,   # ~midpoint; adjust to your comfort position
         baudrate=57600,
         alpha=0.5,
     ),
