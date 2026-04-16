@@ -28,7 +28,6 @@ from rclpy.node import Node
 from sensor_msgs.msg import JointState
 from std_msgs.msg import Bool
 
-from gello_driver.config import PORT_CONFIG_MAP, GelloConfig
 from gello_driver.dynamixel_driver import (
     DynamixelDriver,
     FakeDynamixelDriver,
@@ -105,7 +104,6 @@ class GelloNode(Node):
         self.declare_parameter("alpha", 0.5)
         self.declare_parameter("publish_rate", 50.0)
         self.declare_parameter("use_fake_driver", False)
-        self.declare_parameter("auto_detect_port", True)
 
         # GPIO switches
         self.declare_parameter("gpio_enabled", False)
@@ -120,33 +118,55 @@ class GelloNode(Node):
         ])
 
         # ------------------------------------------------------------------ #
-        # Resolve configuration
+        # Load parameters into members
         # ------------------------------------------------------------------ #
-        self._cfg = self._resolve_config()
+        port = self.get_parameter("port").get_parameter_value().string_value
+        baudrate = self.get_parameter("baudrate").get_parameter_value().integer_value
+        self._joint_ids = list(
+            self.get_parameter("joint_ids").get_parameter_value().integer_array_value
+        )
+        self._joint_offsets = np.array(
+            self.get_parameter("joint_offsets").get_parameter_value().double_array_value
+        )
+        self._joint_signs = np.array([
+            int(s)
+            for s in self.get_parameter("joint_signs").get_parameter_value().integer_array_value
+        ])
+        self._joint_names = self.get_parameter("joint_names").get_parameter_value().string_array_value
+
+        gripper_id_val = self.get_parameter("gripper_id").get_parameter_value().integer_value
+        self._gripper_id = gripper_id_val if gripper_id_val >= 0 else None
+        self._gripper_open_deg = self.get_parameter("gripper_open").get_parameter_value().double_value
+        self._gripper_closed_deg = self.get_parameter("gripper_closed").get_parameter_value().double_value
+        self._gripper_hold_deg = self.get_parameter("gripper_hold").get_parameter_value().double_value
+
+        self._alpha = self.get_parameter("alpha").get_parameter_value().double_value
+        publish_rate = self.get_parameter("publish_rate").get_parameter_value().double_value
+
+        # Helper list for driver initialization
+        all_ids = list(self._joint_ids)
+        if self._gripper_id is not None:
+            all_ids.append(self._gripper_id)
 
         # ------------------------------------------------------------------ #
         # Initialise driver
         # ------------------------------------------------------------------ #
         use_fake = self.get_parameter("use_fake_driver").get_parameter_value().bool_value
-        all_ids = self._cfg.all_ids
 
         if use_fake:
             self._driver = FakeDynamixelDriver(all_ids)
-            self.get_logger().warn("Using FakeDynamixelDriver — no hardware required.")
+            self.get_logger().warn("Using FakeDynamixelDriver")
         else:
             self._driver = DynamixelDriver(
                 ids=all_ids,
-                port=self._cfg.port if hasattr(self._cfg, "port") else
-                     self.get_parameter("port").get_parameter_value().string_value,
-                baudrate=self._cfg.baudrate,
+                port=port,
+                baudrate=baudrate,
                 use_fake_fallback=True,
             )
             if self._driver.is_fake:
-                self.get_logger().warn(
-                    "Hardware not found — running with FakeDynamixelDriver."
-                )
+                self.get_logger().warn("Hardware not found — running with FakeDynamixelDriver.")
             else:
-                self.get_logger().info("Dynamixel driver initialised on real hardware.")
+                self.get_logger().info(f"Dynamixel driver initialised on {port} at {baudrate} baud.")
 
         # ------------------------------------------------------------------ #
         # Startup hardware sequence
@@ -160,29 +180,22 @@ class GelloNode(Node):
         self._driver.set_led(True)                   # step 2: LEDs on
         self.get_logger().info("Motor LEDs activated.")
 
-        self._init_active_joints()                   # steps 3 & 4
+        self._init_active_joints()
 
         # ------------------------------------------------------------------ #
-        # Internal state
+        # Internal control state
         # ------------------------------------------------------------------ #
-        self._joint_offsets = np.array(self._cfg.joint_offsets)
-        self._joint_signs = np.array(self._cfg.joint_signs)
-        self._alpha = self._cfg.alpha
         self._last_pos: Optional[np.ndarray] = None
-        self._joint_names: List[str] = (
-            self.get_parameter("joint_names").get_parameter_value().string_array_value
-        )
 
         # ------------------------------------------------------------------ #
         # JointCommand publisher
         # ------------------------------------------------------------------ #
         self._pub = self.create_publisher(JointState, "/gello/joint_command", 10)
 
-        rate = self.get_parameter("publish_rate").get_parameter_value().double_value
-        self._timer = self.create_timer(1.0 / rate, self._publish_cb)
+        self._timer = self.create_timer(1.0 / publish_rate, self._publish_cb)
 
         self.get_logger().info(
-            f"GelloNode started — publishing at {rate:.0f} Hz on /gello/joint_command"
+            f"GelloNode started — publishing at {publish_rate:.1f} Hz on /gello/joint_command"
         )
 
         # ------------------------------------------------------------------ #
@@ -198,92 +211,37 @@ class GelloNode(Node):
             self.get_logger().info("GPIO switches disabled (gpio_enabled=false).")
 
     # ----------------------------------------------------------------------- #
-    # Config resolution
-    # ----------------------------------------------------------------------- #
-
-    def _resolve_config(self) -> GelloConfig:
-        """
-        If auto_detect_port is True and the port is in PORT_CONFIG_MAP,
-        use the registered GelloConfig (ignoring individual params).
-        Otherwise, build a GelloConfig from individual ROS 2 parameters.
-        """
-        port = self.get_parameter("port").get_parameter_value().string_value
-        auto = self.get_parameter("auto_detect_port").get_parameter_value().bool_value
-
-        if auto and port in PORT_CONFIG_MAP:
-            cfg = PORT_CONFIG_MAP[port]
-            self.get_logger().info(
-                f"Auto-detected config for port {port}"
-            )
-            # Attach the port string so the driver can use it
-            cfg.__dict__["port"] = port
-            return cfg
-
-        # Build from params
-        joint_ids = list(
-            self.get_parameter("joint_ids").get_parameter_value().integer_array_value
-        )
-        joint_offsets = list(
-            self.get_parameter("joint_offsets").get_parameter_value().double_array_value
-        )
-        joint_signs = [
-            int(s)
-            for s in self.get_parameter("joint_signs").get_parameter_value().integer_array_value
-        ]
-        gripper_id_val = self.get_parameter("gripper_id").get_parameter_value().integer_value
-        gripper_id = gripper_id_val if gripper_id_val > 0 else None
-
-        cfg = GelloConfig(
-            joint_ids=joint_ids,
-            joint_offsets=joint_offsets,
-            joint_signs=joint_signs,
-            gripper_id=gripper_id,
-            gripper_open_pos_deg=self.get_parameter("gripper_open").get_parameter_value().double_value,
-            gripper_closed_pos_deg=self.get_parameter("gripper_closed").get_parameter_value().double_value,
-            gripper_hold_pos_deg=self.get_parameter("gripper_hold").get_parameter_value().double_value,
-            baudrate=self.get_parameter("baudrate").get_parameter_value().integer_value,
-            alpha=self.get_parameter("alpha").get_parameter_value().double_value,
-        )
-        cfg.__dict__["port"] = port
-        return cfg
-
-    # ----------------------------------------------------------------------- #
     # Hardware initialization for active joints (Gripper + Shoulder)
     # ----------------------------------------------------------------------- #
 
     def _init_active_joints(self) -> None:
         """
-        Configure active joints (Gripper and specified arm joints) for
-        Current-based Position Control Mode (Mode 5).
-
-        Passive joints (rest of the arm) remain with torque OFF.
+        Configure active joints for Current-based Position Control Mode (Mode 5).
         """
         # --- 1. Shoulder Joint (Second from base, index 1) ---
-        # The user requested this joint to hold at 0 degrees.
-        if len(self._cfg.joint_ids) > 1:
-            sid = self._cfg.joint_ids[1]
-            # Offset corresponds to 0 degrees in GELLO space
-            hold_rad = self._cfg.joint_offsets[1]
+        if len(self._joint_ids) > 1:
+            sid = self._joint_ids[1]
+            hold_rad = self._joint_offsets[1]
             try:
                 self._driver.set_operating_mode_ids([sid], CURRENT_BASED_POSITION_CTRL_MODE)
                 self._driver.set_torque_mode_ids([sid], True)
                 self._driver.set_goal_position_single(sid, hold_rad)
                 self.get_logger().info(
-                    f"Arm Joint ID {sid} (Shoulder): Mode 5 ON, holding at 0° (raw offset)."
+                    f"Arm Joint ID {sid} (Shoulder): Mode 5 ON, holding at 0°."
                 )
             except Exception as exc:
                 self.get_logger().error(f"Failed to init shoulder joint ID {sid}: {exc}")
 
         # --- 2. Gripper ---
-        if self._cfg.gripper_id is not None:
-            gid = self._cfg.gripper_id
-            hold_rad = math.radians(self._cfg.gripper_hold_pos_deg)
+        if self._gripper_id is not None:
+            gid = self._gripper_id
+            hold_rad = math.radians(self._gripper_hold_deg)
             try:
                 self._driver.set_operating_mode_ids([gid], CURRENT_BASED_POSITION_CTRL_MODE)
                 self._driver.set_torque_mode_ids([gid], True)
                 self._driver.set_goal_position_single(gid, hold_rad)
                 self.get_logger().info(
-                    f"Gripper ID {gid}: Mode 5 ON, holding at {self._cfg.gripper_hold_pos_deg:.1f}°."
+                    f"Gripper ID {gid}: Mode 5 ON, holding at {self._gripper_hold_deg:.1f}°."
                 )
             except Exception as exc:
                 self.get_logger().error(f"Failed to init gripper ID {gid}: {exc}")
@@ -302,7 +260,8 @@ class GelloNode(Node):
             return
 
         # --- Apply calibration to arm joints only --------------------------
-        arm_raw = raw[: self._cfg.n_joints]
+        n_arm = len(self._joint_ids)
+        arm_raw = raw[:n_arm]
         arm_pos = (arm_raw - self._joint_offsets) * self._joint_signs
 
         # Exponential smoothing
@@ -314,19 +273,20 @@ class GelloNode(Node):
 
         # Optionally compute normalised gripper [0, 1]
         gripper_norm: Optional[float] = None
-        if self._cfg.gripper_id is not None and len(raw) > self._cfg.n_joints:
-            gr = self._cfg.gripper_range_rad
-            g_raw = raw[self._cfg.n_joints]
-            if gr is not None and abs(gr[1] - gr[0]) > 1e-6:
+        if self._gripper_id is not None and len(raw) > n_arm:
+            g_raw = raw[n_arm]
+            g_open = math.radians(self._gripper_open_deg)
+            g_close = math.radians(self._gripper_closed_deg)
+            if abs(g_close - g_open) > 1e-6:
                 gripper_norm = float(np.clip(
-                    (g_raw - gr[0]) / (gr[1] - gr[0]), 0.0, 1.0
+                    (g_raw - g_open) / (g_close - g_open), 0.0, 1.0
                 ))
 
         # --- Build and publish message -------------------------------------
         msg = JointState()
         msg.header.stamp = self.get_clock().now().to_msg()
         msg.header.frame_id = "fr3_link0"
-        msg.name = list(self._joint_names[: self._cfg.n_joints])
+        msg.name = list(self._joint_names[:n_arm])
         msg.position = arm_pos.tolist()
 
         if gripper_norm is not None:
@@ -399,12 +359,18 @@ class GelloNode(Node):
     # ----------------------------------------------------------------------- #
 
     def destroy_node(self) -> None:
-        # Disable gripper torque before closing
-        if self._cfg.gripper_id is not None:
+        # Disable torque for active joints before closing
+        if self._gripper_id is not None:
             try:
-                self._driver.set_torque_mode_ids([self._cfg.gripper_id], False)
+                self._driver.set_torque_mode_ids([self._gripper_id], False)
             except Exception:
                 pass
+        if len(self._joint_ids) > 1:
+            try:
+                self._driver.set_torque_mode_ids([self._joint_ids[1]], False)
+            except Exception:
+                pass
+
         # Turn off all LEDs
         try:
             self._driver.set_led(False)
