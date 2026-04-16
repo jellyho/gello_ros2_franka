@@ -66,7 +66,9 @@ class FrankaEnv:
         
     def sync_viewer(self) -> None:
         """Sync the viewer if active."""
-        if self._render and self._viewer is not None:
+        if self._render:
+            if self._viewer is None:
+                self._display()
             self._viewer.sync()
 
     def _display(self) -> None:

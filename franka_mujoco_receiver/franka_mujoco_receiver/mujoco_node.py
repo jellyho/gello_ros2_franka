@@ -3,6 +3,7 @@ from rclpy.node import Node
 from sensor_msgs.msg import JointState
 import numpy as np
 import threading
+import time
 from typing import List, Optional
 
 from .franka_env import FrankaEnv
@@ -15,10 +16,8 @@ class FrankaMujocoNode(Node):
         # Parameters
         # ------------------------------------------------------------------ #
         self.declare_parameter("joint_names_mj", [f"fr3_joint{i}" for i in range(1, 8)])
-        self.declare_parameter("step_rate", 500.0) # Higher Hz for better responsiveness
         
         self._joint_names_mj = self.get_parameter("joint_names_mj").value
-        self._step_rate = self.get_parameter("step_rate").value
 
         # ------------------------------------------------------------------ #
         # State
@@ -41,10 +40,6 @@ class FrankaMujocoNode(Node):
         self.get_logger().info(f"FrankaMujocoNode listening on /gello/joint_command")
 
     def _joint_command_cb(self, msg: JointState) -> None:
-        # Debug: Print something as soon as ANY message hits the callback
-        if self._msg_count == 0:
-            self.get_logger().info("!!! CALLBACK TRIGGERED !!! First message arrived.")
-            
         if len(msg.name) == 0 or len(msg.position) == 0:
             return
 
@@ -72,24 +67,45 @@ def main():
     rclpy.init()
     node = FrankaMujocoNode()
 
-    # Create a separate thread for ROS spinning to ensure messages are never missed
+    # ROS spinning in a separate thread
     spin_thread = threading.Thread(target=rclpy.spin, args=(node,), daemon=True)
     spin_thread.start()
 
-    # Local simulation loop
+    # Simulation setup
     env = FrankaEnv(render=True)
-    rate = node.create_rate(node._step_rate)
+    
+    # Real-time synchronization state
+    start_time = time.time()
+    sim_start_time = env._data.time
+    
+    node.get_logger().info("Starting ASYNC real-time simulation loop...")
     
     try:
-        node.get_logger().info("Starting simulation loop...")
         while rclpy.ok():
-            target = node.get_target()
-            if target is not None:
-                env.set_joint_position_target(target)
+            # 1. Update target for the environment
+            latest_target = node.get_target()
+            if latest_target is not None:
+                env.set_joint_position_target(latest_target)
             
-            # Pass the delta time (1/rate) to the step function
-            env.step(1.0 / node._step_rate)
-            rate.sleep()
+            # 2. Synchronize simulation time with wall-clock time
+            wall_time_elapsed = time.time() - start_time
+            sim_time_elapsed = env._data.time - sim_start_time
+            
+            # If simulation is behind reality, catch up
+            # We limit catch-up steps per frame to avoid "spiral of death" 
+            # if the computer is way too slow.
+            max_steps_per_frame = 20
+            steps = 0
+            while (env._data.time - sim_start_time) < wall_time_elapsed and steps < max_steps_per_frame:
+                env.step()
+                steps += 1
+            
+            # 3. Render and sync viewer sparingly (approx 60-100Hz for visual comfort)
+            env.sync_viewer()
+            
+            # Short sleep to prevent 100% CPU usage while maintaining high responsiveness
+            time.sleep(0.001)
+
     except KeyboardInterrupt:
         pass
     finally:
