@@ -1,0 +1,59 @@
+import math
+
+# ---------------------------------------------------------------------------
+# gello_driver default parameters
+# ---------------------------------------------------------------------------
+# All values can be overridden via command-line or launch file arguments.
+#
+# Tip: for a known device, set port to the by-id path and enable
+#       auto_detect_port so the calibration is loaded from PORT_CONFIG_MAP.
+# ---------------------------------------------------------------------------
+
+gello_node:
+  ros__parameters:
+    # Serial port ─ prefer /dev/serial/by-id/... for stability
+    port: "/dev/ttyUSB0"
+    auto_detect_port: true
+
+    # Dynamixel bus
+    baudrate: 57600
+
+    # Servo IDs (arm joints only, not including gripper)
+    joint_ids: [1, 2, 3, 4, 5, 6, 7]
+
+    # Per-joint offset (radians).  Adjust so that GELLO home = robot home.
+    joint_offsets:
+      - 4.71238898038   # 3π/2
+      - 3.14159265359   # 2π/2
+      - 1.57079632679   # 1π/2
+      - 6.28318530718   # 4π/2
+      - 3.14159265359   # -2π/2 + 2π = π
+      - 4.71238898038   # 3π/2
+      - 6.28318530718   # 4π/2
+
+    # Per-joint sign correction (+1 or -1)
+    joint_signs: [1, -1, 1, 1, 1, -1, 1]
+
+    # Published joint names (must match the robot URDF)
+    joint_names:
+      - fr3_joint1
+      - fr3_joint2
+      - fr3_joint3
+      - fr3_joint4
+      - fr3_joint5
+      - fr3_joint6
+      - fr3_joint7
+
+    # Gripper — set gripper_id to -1 to disable
+    gripper_id: 8
+    gripper_open: 195.0    # degrees
+    gripper_closed: 152.0  # degrees
+
+    # Smoothing (alpha=1.0 → raw, alpha→0 → very smooth/lagged)
+    alpha: 0.5
+
+    # Publishing rate (Hz)
+    publish_rate: 50.0
+
+    # Set to true to run without hardware (for testing)
+    use_fake_driver: false
