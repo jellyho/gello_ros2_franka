@@ -3,8 +3,8 @@ gello_node.py — ROS 2 node: reads GELLO Dynamixel servos and publishes
 joint commands on /gello/joint_command (sensor_msgs/JointState).
 
 Also monitors up to N GPIO pins (Jetson Orin Nano) with hardware pull-up
-resistors for rising-edge events and publishes std_msgs/Bool on
-per-switch configurable topics.
+resistors and publishes std_msgs/Bool true pulses on per-switch configurable
+topics when buttons are pressed.
 
 Usage
 -----
@@ -71,10 +71,10 @@ class GelloNode(Node):
     GPIO switch parameters
     ----------------------
     gpio_enabled      : bool  — enable GPIO switch monitoring (default False)
-    gpio_pin_mode     : str   — 'BOARD' (physical) or 'BCM'
+    gpio_pin_mode     : str   — 'BOARD' for physical header pins
+    gpio_pins         : list  — BOARD pin numbers for switches
     gpio_bouncetime_ms: int   — debounce time in milliseconds
-    gpio_pins         : list  — BOARD pin numbers for switches [sw0, sw1, sw2]
-    gpio_topic_names  : list  — ROS 2 topic names for each switch event
+    gpio_topic_names  : list  — ROS 2 topic names for each button press
     """
 
     def __init__(self) -> None:
@@ -100,8 +100,8 @@ class GelloNode(Node):
         # GPIO switches
         self.declare_parameter("gpio_enabled", False)
         self.declare_parameter("gpio_pin_mode", "BOARD")
-        self.declare_parameter("gpio_bouncetime_ms", 50)
-        # Default: three pins commonly available on Jetson Orin Nano 40-pin header
+        self.declare_parameter("gpio_bouncetime_ms", 250)
+        self.declare_parameter("gpio_confirm_delay_ms", 20)
         self.declare_parameter("gpio_pins", [7, 11, 13])
         self.declare_parameter("gpio_topic_names", [
             "/gello/switch/0",
@@ -331,24 +331,29 @@ class GelloNode(Node):
         bouncetime = (
             self.get_parameter("gpio_bouncetime_ms").get_parameter_value().integer_value
         )
-
+        confirm_delay = (
+            self.get_parameter("gpio_confirm_delay_ms").get_parameter_value().integer_value
+        )
         self._gpio_handler = GpioSwitchHandler(
             pin_configs=pin_configs,
             callback=self._gpio_edge_cb,
             pin_mode=pin_mode,
             bouncetime_ms=bouncetime,
+            confirm_delay_ms=confirm_delay,
             logger=self.get_logger(),
         )
 
-    def _gpio_edge_cb(self, topic_name: str) -> None:
+    def _gpio_edge_cb(self, topic_name: str, pressed: bool) -> None:
         """
-        Called from a GPIO interrupt thread when a rising edge fires.
+        Called from a GPIO interrupt thread when a button is pressed.
         Publishes Bool(True) on the corresponding topic.
 
         Note: GPIO callbacks run in a C-level thread that is NOT the ROS 2
         executor thread.  Publishing from here is safe in rclpy because
         the publisher is thread-safe, but we guard with a lock to be tidy.
         """
+        if not pressed:
+            return
         with self._gpio_pub_lock:
             pub = self._switch_pubs.get(topic_name)
             if pub is None:
@@ -356,7 +361,7 @@ class GelloNode(Node):
             msg = Bool()
             msg.data = True
             pub.publish(msg)
-        self.get_logger().info(f"GPIO rising edge → published on {topic_name}")
+        self.get_logger().info(f"GPIO button pressed -> published true on {topic_name}")
 
     # ----------------------------------------------------------------------- #
     # Cleanup

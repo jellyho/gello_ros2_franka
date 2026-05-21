@@ -6,7 +6,7 @@ mujoco>=3.1.0
 
 # GPIO — Jetson Orin Nano
 # Install: pip install Jetson.GPIO
-# Also add user to gpio group: sudo usermod -aG gpio $USER
+# Also add user to gpio group if needed: sudo usermod -aG gpio $USER
 Jetson.GPIO>=2.1.0
 
 # ROS 2 Python packages (installed via apt / rosdep, listed for reference)

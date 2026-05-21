@@ -16,7 +16,7 @@ gello_node:
     joint_ids: [0, 1, 2, 3, 4, 5, 6]
 
     # Per-joint offset (degrees).  Adjust so that GELLO home = robot home.
-    joint_offsets: [270.0, 360.0, 90.0, 360.0, 0.0, 90.0, 360.0]
+    joint_offsets: [270.0, 360.0, 90.0, 360.0, 360.0, 90.0, 360.0]
 
     # Per-joint sign correction (+1 or -1)
     joint_signs: [1, -1, 1, 1, 1, 1, 1]
@@ -58,32 +58,33 @@ gello_node:
     # Hardware assumption: each pin is pulled HIGH via an external resistor.
     #   - Switch open (not pressed) : pin = HIGH
     #   - Switch closed (pressed)   : pin = LOW
-    #   - Rising edge               : LOW → HIGH  = button release event
+    #   - Press event               : false -> true, publishes Bool(data=true)
     #
     # gpio_enabled      : set to true to activate GPIO monitoring
-    # gpio_pin_mode     : 'BOARD' = physical 40-pin header numbers (recommended)
-    #                     'BCM'   = Broadcom GPIO numbers
-    # gpio_bouncetime_ms: debounce window in milliseconds (default 50)
+    # gpio_pin_mode     : 'BOARD' = physical 40-pin header numbers
     # gpio_pins         : list of physical pin numbers, one per switch
-    # gpio_topic_names  : list of ROS 2 topic names, one per switch
+    # gpio_bouncetime_ms: debounce/cooldown window in milliseconds
+    # gpio_confirm_delay_ms: delay before confirming the line is still LOW
+    # gpio_topic_names  : list of ROS 2 topic names, one per switch press
     #
     # gpio_pins and gpio_topic_names MUST have the same length.
     #
-    # Jetson Orin Nano 40-pin header — frequently usable GPIO pins (BOARD):
-    #   Pin  7 → GPIO09  /  Pin 11 → GPIO17  /  Pin 13 → GPIO27
-    #   Pin 15 → GPIO22  /  Pin 29 → GPIO05  /  Pin 31 → GPIO06
+    # Jetson Orin Nano physical pin mapping:
+    #   Pin  7 -> /gello/switch/record
+    #   Pin 11 -> /gello/switch/success
+    #   Pin 13 -> /gello/switch/failed
     # ---------------------------------------------------------------------------
-    gpio_enabled: false
+    gpio_enabled: true
 
     gpio_pin_mode: "BOARD"
-    gpio_bouncetime_ms: 50
+    gpio_bouncetime_ms: 250
+    gpio_confirm_delay_ms: 20
 
     # Physical (BOARD) pin numbers for the three switches
     gpio_pins: [7, 11, 13]
 
-    # ROS 2 topic names published on rising edge (std_msgs/Bool, data=true)
+    # ROS 2 topic names published only on press events (std_msgs/Bool, data=true)
     gpio_topic_names:
       - "/gello/switch/record"
       - "/gello/switch/success"
       - "/gello/switch/failed"
-

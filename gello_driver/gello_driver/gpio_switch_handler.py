@@ -1,153 +1,157 @@
 """
-gpio_switch_handler.py — Jetson GPIO switch input handler.
+gpio_switch_handler.py - Jetson.GPIO button handler for the GELLO controller.
 
-Monitors configurable GPIO pins (hardware pull-up assumed) for rising
-edges and publishes a std_msgs/Bool (True) on individual ROS 2 topics.
+The pins are configured in Jetson.GPIO BOARD mode, so pin numbers refer to the
+physical 40-pin header numbers. The three GELLO buttons are expected on
+physical pins 7, 11, and 13.
 
 Hardware assumption
 -------------------
-- Each pin is pulled HIGH by an external resistor.
-- Switch connects the pin to GND.
-- Rest state  : pin = HIGH
-- Pressed     : pin = LOW
-- Rising edge : LOW → HIGH  (button release)
-
-If you want falling edge (button press detection) instead, change
-GPIO.RISING to GPIO.FALLING in _setup_pin() and update the comment.
-
-Jetson.GPIO notes
------------------
-- Library: `Jetson.GPIO` (pip install Jetson.GPIO)
-- Default numbering: BOARD (physical pin number, stable across boots)
-- Run the node with sufficient privileges or add the user to the
-  `gpio` group:  sudo usermod -aG gpio $USER
+- Each button line is externally pulled HIGH.
+- Pressing the button connects the line to GND.
+- Released: HIGH
+- Pressed : LOW
+- Event   : falling edge, published as Bool(data=true)
 """
 
 from __future__ import annotations
 
 import threading
-from typing import Callable, Dict, List, Optional
+import time
+from typing import Callable, Dict, List
 
 
 class GpioSwitchHandler:
     """
-    Manages rising-edge detection on a set of GPIO pins.
+    Watches BOARD pins and emits one true pulse per button press.
 
     Parameters
     ----------
-    pin_configs : list of (pin_number, topic_name)
-        Each entry maps one physical (BOARD) pin to the ROS 2 topic name
-        that should be published when a rising edge is detected.
-    callback : Callable[[str], None]
-        Called with the topic_name whenever a rising edge fires on the
-        associated pin.
-    pin_mode : str
-        'BOARD' (physical pin numbers, recommended) or 'BCM'.
-    bouncetime_ms : int
-        Debounce time in milliseconds (default 50 ms).
-    logger : optional ROS 2 logger
+    pin_configs:
+        List of (board_pin, topic_name), for example
+        [(7, "/gello/switch/record"), ...].
+    callback:
+        Called as callback(topic_name, True) when a falling edge is accepted.
+    pin_mode:
+        Jetson.GPIO numbering mode. Use "BOARD" for physical header pins.
+    bouncetime_ms:
+        Per-pin cooldown window in milliseconds.
+    confirm_delay_ms:
+        Delay after the edge before confirming that the pin is still LOW.
+    logger:
+        Optional ROS logger.
     """
 
     def __init__(
         self,
-        pin_configs: List[tuple],   # [(pin_number, topic_name), ...]
-        callback: Callable[[str], None],
+        pin_configs: List[tuple],
+        callback: Callable[[str, bool], None],
         pin_mode: str = "BOARD",
-        bouncetime_ms: int = 50,
+        bouncetime_ms: int = 250,
+        confirm_delay_ms: int = 20,
         logger=None,
     ) -> None:
-        self._pin_configs = pin_configs          # [(pin, topic_name)]
+        self._pin_to_topic: Dict[int, str] = {
+            int(pin): topic for pin, topic in pin_configs
+        }
         self._callback = callback
-        self._bouncetime = bouncetime_ms
+        self._pin_mode = pin_mode
+        self._bouncetime_s = max(0, bouncetime_ms) / 1000.0
+        self._confirm_delay_s = max(0, confirm_delay_ms) / 1000.0
         self._logger = logger
-        self._active = False
+        self._last_press_time: Dict[int, float] = {}
         self._lock = threading.Lock()
+        self._active = False
 
-        # Import Jetson.GPIO
         try:
             import Jetson.GPIO as GPIO
-            self._GPIO = GPIO
         except ImportError:
-            if logger:
-                logger.warn(
-                    "[GpioSwitchHandler] Jetson.GPIO not found. "
-                    "GPIO switches will be DISABLED. "
-                    "Install with: pip install Jetson.GPIO"
-                )
             self._GPIO = None
+            self._log_warn(
+                "Jetson.GPIO not found. Install with: pip install Jetson.GPIO"
+            )
             return
 
-        self._setup(pin_mode)
+        self._GPIO = GPIO
+        self._setup()
 
-    # ----------------------------------------------------------------------- #
+    # ------------------------------------------------------------------ #
     # Setup / teardown
-    # ----------------------------------------------------------------------- #
+    # ------------------------------------------------------------------ #
 
-    def _setup(self, pin_mode: str) -> None:
+    def _setup(self) -> None:
         GPIO = self._GPIO
-
         try:
-            mode = GPIO.BOARD if pin_mode.upper() == "BOARD" else GPIO.BCM
+            mode = GPIO.BOARD if self._pin_mode.upper() == "BOARD" else GPIO.BCM
             GPIO.setmode(mode)
         except Exception as exc:
             self._log_warn(f"GPIO.setmode failed: {exc}")
-            self._GPIO = None
             return
 
-        for pin, topic in self._pin_configs:
+        for pin, topic_name in self._pin_to_topic.items():
             try:
-                # INPUT only — hardware pull-up is external, so PUD_OFF
                 GPIO.setup(pin, GPIO.IN)
                 GPIO.add_event_detect(
                     pin,
-                    GPIO.RISING,
-                    callback=self._make_edge_callback(topic),
-                    bouncetime=self._bouncetime,
+                    GPIO.FALLING,
+                    callback=self._edge_cb,
+                    bouncetime=int(self._bouncetime_s * 1000),
                 )
                 self._log_info(
-                    f"GPIO pin {pin} → rising edge → '{topic}'"
+                    f"BOARD pin {pin} -> press event -> '{topic_name}'"
                 )
             except Exception as exc:
                 self._log_warn(
-                    f"Failed to set up GPIO pin {pin} for topic '{topic}': {exc}"
+                    f"Failed to set up BOARD pin {pin} for topic "
+                    f"'{topic_name}': {exc}"
                 )
 
         self._active = True
 
     def cleanup(self) -> None:
-        """Release all GPIO resources. Call on node shutdown."""
         if self._GPIO is None or not self._active:
             return
         try:
-            for pin, _ in self._pin_configs:
+            for pin in self._pin_to_topic:
                 try:
                     self._GPIO.remove_event_detect(pin)
                 except Exception:
                     pass
-            self._GPIO.cleanup([pin for pin, _ in self._pin_configs])
+            self._GPIO.cleanup(list(self._pin_to_topic.keys()))
         except Exception as exc:
             self._log_warn(f"GPIO cleanup error: {exc}")
         self._active = False
 
-    # ----------------------------------------------------------------------- #
-    # Edge callback factory
-    # ----------------------------------------------------------------------- #
+    # ------------------------------------------------------------------ #
+    # Event handling
+    # ------------------------------------------------------------------ #
 
-    def _make_edge_callback(self, topic_name: str) -> Callable:
-        """Return a GPIO interrupt callback bound to the given topic_name."""
+    def _edge_cb(self, channel: int) -> None:
+        try:
+            pin = int(channel)
+            topic_name = self._pin_to_topic.get(pin)
+            if topic_name is None:
+                return
 
-        def _cb(channel: int) -> None:
-            # GPIO callbacks fire in a C thread; avoid heavy work here
-            try:
-                self._callback(topic_name)
-            except Exception as exc:
-                self._log_warn(f"Edge callback error on pin {channel}: {exc}")
+            now = time.monotonic()
+            with self._lock:
+                last = self._last_press_time.get(pin, 0.0)
+                if now - last < self._bouncetime_s:
+                    return
+                self._last_press_time[pin] = now
 
-        return _cb
+            if self._confirm_delay_s > 0:
+                time.sleep(self._confirm_delay_s)
+            if self._GPIO.input(pin) != self._GPIO.LOW:
+                return
 
-    # ----------------------------------------------------------------------- #
+            self._callback(topic_name, True)
+        except Exception as exc:
+            self._log_warn(f"GPIO edge callback error on channel {channel}: {exc}")
+
+    # ------------------------------------------------------------------ #
     # Logging helpers
-    # ----------------------------------------------------------------------- #
+    # ------------------------------------------------------------------ #
 
     def _log_info(self, msg: str) -> None:
         if self._logger:

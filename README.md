@@ -1,6 +1,9 @@
 # gello_ros2_franka
 
 A clean ROS 2 package for teleoperation of Franka robots using GELLO (a Dynamixel-based leader arm).
+In this setup, a Jetson Orin Nano is used as the GELLO controller, running
+the ROS 2 driver node and reading the GPIO button inputs from the controller
+hardware.
 
 ## Overview
 
@@ -48,8 +51,10 @@ gello_ros2_franka/
 
 - ROS 2 Humble (or later)
 - Python ≥ 3.10
+- Jetson Orin Nano as the GELLO controller
 - `dynamixel_sdk` (`pip install dynamixel-sdk`)
 - `mujoco` (`pip install mujoco`)
+- `Jetson.GPIO` (`pip install Jetson.GPIO`)
 - `mujoco-mjx` is optional (GPU acceleration)
 
 ```bash
@@ -86,6 +91,9 @@ Edit `gello_driver/config/gello_params.yaml` or override via the launch file / c
 | `joint_signs` | `[1,-1,1,1,1,-1,1]` | Per-joint sign correction |
 | `publish_rate` | `50` | Publishing frequency (Hz) |
 | `use_fake_driver` | `false` | Use fake driver when hardware not connected |
+| `gpio_pin_mode` | `BOARD` | Jetson.GPIO physical pin numbering mode |
+| `gpio_pins` | `[7,11,13]` | Physical header pins for the three buttons |
+| `gpio_bouncetime_ms` | `250` | Button press debounce / cooldown |
 
 The `PORT_CONFIG_MAP` in `gello_driver/gello_driver/config.py` lets you pre-register full configurations keyed by the port's `by-id` path.
 
@@ -110,6 +118,22 @@ A MuJoCo viewer window will open. Move the GELLO arm and the Franka in the simul
 | Topic | Type | Direction |
 |-------|------|-----------|
 | `/gello/joint_command` | `sensor_msgs/JointState` | gello_driver → receiver |
+| `/gello/switch/record` | `std_msgs/Bool` | gello_driver GPIO button 7 |
+| `/gello/switch/success` | `std_msgs/Bool` | gello_driver GPIO button 11 |
+| `/gello/switch/failed` | `std_msgs/Bool` | gello_driver GPIO button 13 |
+
+For the GPIO topics, the buttons are assumed to be externally pulled up.
+Only the press transition is published: HIGH to LOW sends `Bool(data=true)`.
+Button press events are debounced in software with `gpio_bouncetime_ms`
+to avoid repeated messages from contact bounce.
+
+The configured Jetson Orin Nano physical pin mapping is:
+
+| Physical pin | Topic |
+|--------------|-------|
+| 7 | `/gello/switch/record` |
+| 11 | `/gello/switch/success` |
+| 13 | `/gello/switch/failed` |
 
 ## License
 
