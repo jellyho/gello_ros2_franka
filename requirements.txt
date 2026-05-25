@@ -11,7 +11,6 @@ Jetson.GPIO>=2.1.0
 
 # ROS 2 Python packages (installed via apt / rosdep, listed for reference)
 # rclpy
-# sensor_msgs
 # std_msgs
 
 # Utilities

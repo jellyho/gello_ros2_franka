@@ -1,6 +1,6 @@
 """
 gello_node.py — ROS 2 node: reads GELLO Dynamixel servos and publishes
-joint commands on /gello/joint_command (sensor_msgs/JointState).
+joint commands on /gello/joint_command (std_msgs/Float64MultiArray).
 
 Also monitors up to N GPIO pins (Jetson Orin Nano) with hardware pull-up
 resistors and publishes std_msgs/Bool true pulses on per-switch configurable
@@ -25,8 +25,7 @@ import numpy as np
 import rclpy
 from rclpy.executors import ExternalShutdownException
 from rclpy.node import Node
-from sensor_msgs.msg import JointState
-from std_msgs.msg import Bool
+from std_msgs.msg import Bool, Float64MultiArray
 
 from gello_driver.dynamixel_driver import (
     DynamixelDriver,
@@ -50,7 +49,7 @@ FRANKA_JOINT_NAMES = [
 
 class GelloNode(Node):
     """
-    ROS 2 node that polls a GELLO device and publishes JointState commands.
+    ROS 2 node that polls a GELLO device and publishes joint command arrays.
 
     Parameters (declared as ROS 2 params, can be set in YAML or CLI)
     ----------
@@ -59,7 +58,7 @@ class GelloNode(Node):
     joint_ids         : list  — servo IDs (arm joints only)
     joint_offsets     : list  — per-joint offset (rad)
     joint_signs       : list  — per-joint sign (+1 or -1)
-    joint_names       : list  — joint names for the published JointState
+    joint_names       : list  — joint order for the published command array
     gripper_id        : int   — gripper servo ID (-1 = no gripper)
     gripper_open      : float — gripper open position (deg)
     gripper_closed    : float — gripper closed position (deg)
@@ -182,7 +181,7 @@ class GelloNode(Node):
         # ------------------------------------------------------------------ #
         # JointCommand publisher
         # ------------------------------------------------------------------ #
-        self._pub = self.create_publisher(JointState, "/gello/joint_command", 10)
+        self._pub = self.create_publisher(Float64MultiArray, "/gello/joint_command", 10)
 
         self._timer = self.create_timer(1.0 / publish_rate, self._publish_cb)
 
@@ -287,15 +286,11 @@ class GelloNode(Node):
                 ))
 
         # --- Build and publish message -------------------------------------
-        msg = JointState()
-        msg.header.stamp = self.get_clock().now().to_msg()
-        msg.header.frame_id = "fr3_link0"
-        msg.name = list(self._joint_names[:n_arm])
-        msg.position = arm_pos.tolist()
+        msg = Float64MultiArray()
+        msg.data = arm_pos.tolist()
 
         if gripper_norm is not None:
-            msg.name.append("finger_joint")
-            msg.position.append(gripper_norm)
+            msg.data.append(gripper_norm)
 
         self._pub.publish(msg)
 

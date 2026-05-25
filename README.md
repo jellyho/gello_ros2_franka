@@ -9,7 +9,7 @@ hardware.
 
 This repo provides two ROS 2 nodes:
 
-1. **`gello_driver`** — Reads joint positions from GELLO (Dynamixel servos) and publishes them as `sensor_msgs/JointState` on `/gello/joint_command`.
+1. **`gello_driver`** — Reads joint positions from GELLO (Dynamixel servos) and publishes them as `std_msgs/Float64MultiArray` on `/gello/joint_command`.
 2. **`franka_mujoco_receiver`** — Receives the joint commands and drives a simulated Franka Emika robot in MuJoCo in real-time. Use this to validate teleoperation before running on real hardware.
 
 ```
@@ -117,7 +117,7 @@ A MuJoCo viewer window will open. Move the GELLO arm and the Franka in the simul
 
 | Topic | Type | Direction |
 |-------|------|-----------|
-| `/gello/joint_command` | `sensor_msgs/JointState` | gello_driver → receiver |
+| `/gello/joint_command` | `std_msgs/Float64MultiArray` | gello_driver → receiver |
 | `/gello/switch/record` | `std_msgs/Bool` | gello_driver GPIO button 7 |
 | `/gello/switch/success` | `std_msgs/Bool` | gello_driver GPIO button 11 |
 | `/gello/switch/failed` | `std_msgs/Bool` | gello_driver GPIO button 13 |

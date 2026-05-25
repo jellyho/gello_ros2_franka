@@ -1,10 +1,10 @@
 import rclpy
 from rclpy.node import Node
-from sensor_msgs.msg import JointState
+from std_msgs.msg import Float64MultiArray
 import numpy as np
 import threading
 import time
-from typing import List, Optional
+from typing import Optional
 
 from .franka_env import FrankaEnv
 
@@ -31,7 +31,7 @@ class FrankaMujocoNode(Node):
         # ROS 2 Interface
         # ------------------------------------------------------------------ #
         self._sub = self.create_subscription(
-            JointState,
+            Float64MultiArray,
             "/gello/joint_command",
             self._joint_command_cb,
             10
@@ -39,19 +39,15 @@ class FrankaMujocoNode(Node):
         
         self.get_logger().info(f"FrankaMujocoNode listening on /gello/joint_command")
 
-    def _joint_command_cb(self, msg: JointState) -> None:
-        if len(msg.name) == 0 or len(msg.position) == 0:
+    def _joint_command_cb(self, msg: Float64MultiArray) -> None:
+        if len(msg.data) < self._n_joints:
+            self.get_logger().warn(
+                f"Ignoring short joint command: expected at least "
+                f"{self._n_joints} values, got {len(msg.data)}"
+            )
             return
 
-        name_to_pos = {name: pos for name, pos in zip(msg.name, msg.position)}
-        positions = np.zeros(self._n_joints)
-        
-        for i, mj_name in enumerate(self._joint_names_mj):
-            ros_name = f"fr3_{mj_name}" if not mj_name.startswith("fr3_") else mj_name
-            if mj_name in name_to_pos:
-                positions[i] = name_to_pos[mj_name]
-            elif ros_name in name_to_pos:
-                positions[i] = name_to_pos[ros_name]
+        positions = np.array(msg.data[:self._n_joints], dtype=float)
 
         with self._lock:
             self._target = positions

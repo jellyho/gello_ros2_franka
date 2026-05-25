@@ -44,7 +44,7 @@ gello_node:
     gripper_hold: 100.0    # degrees — hold / rest position
 
     # Smoothing (alpha=1.0 → raw, alpha→0 → very smooth/lagged)
-    alpha: 0.5
+    alpha: 0.8
 
     # Publishing rate (Hz)
     publish_rate: 20.0
