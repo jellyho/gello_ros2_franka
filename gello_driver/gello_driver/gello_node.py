@@ -87,6 +87,16 @@ class GelloNode(Node):
         self.declare_parameter("joint_ids", [1, 2, 3, 4, 5, 6, 7])
         self.declare_parameter("joint_offsets", [270.0, 180.0, 90.0, 360.0, 180.0, 270.0, 360.0])  # in degrees
         self.declare_parameter("joint_signs", [1, -1, 1, 1, 1, -1, 1])
+        # Per-joint spring-back hold targets (degrees).  Any joint whose
+        # entry is NaN is left passive (torque off, free-swinging leader).
+        # Entries that are finite → that joint enters Current-based Position
+        # Control (Mode 5) and is driven to hold that raw servo angle with a
+        # current-limited torque (limit set in servo EEPROM).
+        # YAML: use `.nan` for "no hold", e.g. [0.0, 90.0, .nan, .nan, .nan, .nan, .nan]
+        self.declare_parameter(
+            "joint_targets",
+            [float("nan")] * 7,
+        )
         self.declare_parameter("joint_names", FRANKA_JOINT_NAMES)
         self.declare_parameter("gripper_id", -1)          # -1 = no gripper
         self.declare_parameter("gripper_open", 195.0)     # degrees
@@ -95,6 +105,11 @@ class GelloNode(Node):
         self.declare_parameter("alpha", 0.5)
         self.declare_parameter("publish_rate", 50.0)
         self.declare_parameter("use_fake_driver", False)
+
+        # Auto-calibration: snap raw at startup to nearest N° and use as
+        # snap offset; effective offset = snap + yaml joint_offsets.
+        self.declare_parameter("auto_calibrate", True)
+        self.declare_parameter("calibration_snap_deg", 360.0)
 
         # GPIO switches
         self.declare_parameter("gpio_enabled", False)
@@ -116,9 +131,13 @@ class GelloNode(Node):
         self._joint_ids = list(
             self.get_parameter("joint_ids").get_parameter_value().integer_array_value
         )
-        # Load joint offsets in degrees and convert to radians
+        # Load joint offsets in degrees and convert to radians.
+        # These are the USER TRIM offsets: additive per-joint corrections
+        # applied on top of the auto-calibrated snap offsets.
+        # When auto_calibrate=false, they are used as the sole offsets.
         joint_offsets_deg = self.get_parameter("joint_offsets").get_parameter_value().double_array_value
-        self._joint_offsets = np.radians(joint_offsets_deg)
+        self._user_offsets = np.radians(joint_offsets_deg)
+        self._joint_offsets = self._user_offsets.copy()  # replaced by _auto_calibrate_offsets if enabled
         self._joint_signs = np.array([
             int(s)
             for s in self.get_parameter("joint_signs").get_parameter_value().integer_array_value
@@ -133,6 +152,24 @@ class GelloNode(Node):
 
         self._alpha = self.get_parameter("alpha").get_parameter_value().double_value
         publish_rate = self.get_parameter("publish_rate").get_parameter_value().double_value
+
+        self._auto_calibrate = self.get_parameter("auto_calibrate").get_parameter_value().bool_value
+        self._snap_deg = self.get_parameter("calibration_snap_deg").get_parameter_value().double_value
+
+        # Per-joint hold targets (raw servo degrees).  NaN entries are
+        # "leave passive."  If the list length doesn't match joint_ids,
+        # fall back to all-NaN (no joint held).
+        joint_targets_deg = list(
+            self.get_parameter("joint_targets").get_parameter_value().double_array_value
+        )
+        if len(joint_targets_deg) != len(self._joint_ids):
+            if len(joint_targets_deg) > 0:
+                self.get_logger().warn(
+                    f"joint_targets length {len(joint_targets_deg)} != "
+                    f"joint_ids length {len(self._joint_ids)}; ignoring."
+                )
+            joint_targets_deg = [float("nan")] * len(self._joint_ids)
+        self._joint_targets_rad = np.radians(joint_targets_deg)
 
         # Helper list for driver initialization
         all_ids = list(self._joint_ids)
@@ -162,14 +199,20 @@ class GelloNode(Node):
         # ------------------------------------------------------------------ #
         # Startup hardware sequence
         # ──────────────────────────────────────────────────────────────────
-        # 1. Ensure ALL motors torque-off (required to change operating mode)
-        # 2. Turn on LEDs for all motors  (visual feedback)
-        # 3. Arm joints: stay torque-off  (GELLO = passive leader)
-        # 4. Gripper:   position-control mode → torque on → hold position
+        # Driver init already disabled torque on all IDs; do NOT re-disable
+        # here — the reader thread is now running and a redundant write can
+        # collide on the serial bus (RX_TIMEOUT).
+        # 1. Turn on LEDs for all motors  (visual feedback)
+        # 2. Held joints: mode 5 + torque on + goal position (per joint_targets)
+        # 3. Gripper:     mode 5 + torque on + hold at gripper_hold
         # ------------------------------------------------------------------ #
-        self._driver.set_torque_mode(False)          # step 1: all off
-        self._driver.set_led(True)                   # step 2: LEDs on
+        self._driver.set_led(True)
         self.get_logger().info("Motor LEDs activated.")
+
+        # Auto-calibrate BEFORE turning on current-controlled hold so that
+        # J1/J2/gripper hold targets match the snapped (clean 90°) offsets.
+        if self._auto_calibrate and not self._driver.is_fake:
+            self._auto_calibrate_offsets()
 
         self._init_active_joints()
 
@@ -202,38 +245,75 @@ class GelloNode(Node):
             self.get_logger().info("GPIO switches disabled (gpio_enabled=false).")
 
     # ----------------------------------------------------------------------- #
+    # Auto-calibration: snap raw at startup to nearest snap_deg
+    # ----------------------------------------------------------------------- #
+
+    def _auto_calibrate_offsets(self) -> None:
+        """
+        Read raw joint positions once, snap each to the nearest snap_deg
+        boundary → that's the SNAP offset.  Final effective offset is
+        snap + user_trim (yaml joint_offsets).  The snap alone is used as
+        the current-controlled hold target for J1/J2/gripper.
+        """
+        raw_all = self._driver.get_joints()  # blocks until first reading
+        raw_arm = np.asarray(raw_all[: len(self._joint_ids)], dtype=float)
+        raw_deg = np.degrees(raw_arm)
+        snapped_deg = np.round(raw_deg / self._snap_deg) * self._snap_deg
+        self._snap_offsets = np.radians(snapped_deg)
+        self._joint_offsets = self._snap_offsets + self._user_offsets
+
+        residual_deg = raw_deg - snapped_deg
+        max_res = float(np.max(np.abs(residual_deg)))
+        self.get_logger().info(
+            f"Snap offsets (deg, snap={self._snap_deg:g}°): {snapped_deg.tolist()}"
+        )
+        self.get_logger().info(
+            f"User trim (deg):     {np.degrees(self._user_offsets).tolist()}"
+        )
+        self.get_logger().info(
+            f"Effective offsets (deg): {np.degrees(self._joint_offsets).tolist()}"
+        )
+        self.get_logger().info(
+            f"Snap residual (deg): {residual_deg.tolist()}  (max {max_res:.2f}°)"
+        )
+        if max_res > self._snap_deg / 2.0:
+            self.get_logger().warn(
+                f"Residual exceeds snap/2 = {self._snap_deg / 2:.1f}° — GELLO was "
+                "probably parked closer to a different 90° boundary than intended."
+            )
+
+    # ----------------------------------------------------------------------- #
     # Hardware initialization for active joints (Gripper + Shoulder)
     # ----------------------------------------------------------------------- #
 
     def _init_active_joints(self) -> None:
         """
-        Configure active joints for Current-based Position Control Mode (Mode 5).
+        Configure Current-based Position Control (Mode 5) hold for every arm
+        joint that has a finite joint_targets entry.  joint_targets are in
+        OUTPUT space; converted to raw servo angle via
+            raw_target = target_output * sign + effective_offset
+        so a target of 0 = "hold at output=0" regardless of calibration.
+        Joints with NaN target stay torque-off (passive leader).
         """
-        # --- 1. Base and Shoulder Joint (Second from base, index 1) ---
-        if len(self._joint_ids) > 1:
-            sid = self._joint_ids[0]
-            hold_rad = self._joint_offsets[0]
+        # --- 1. Arm joints ---
+        for i, sid in enumerate(self._joint_ids):
+            target_output_rad = self._joint_targets_rad[i]
+            if not np.isfinite(target_output_rad):
+                continue
+            raw_target_rad = (
+                target_output_rad * self._joint_signs[i] + self._joint_offsets[i]
+            )
             try:
                 self._driver.set_operating_mode_ids([sid], CURRENT_BASED_POSITION_CTRL_MODE)
                 self._driver.set_torque_mode_ids([sid], True)
-                self._driver.set_goal_position_single(sid, hold_rad)
+                self._driver.set_goal_position_single(sid, raw_target_rad)
                 self.get_logger().info(
-                    f"Arm Joint ID {sid} (Base): Mode 5 ON, holding at {math.degrees(hold_rad)}°."
+                    f"Arm Joint ID {sid} (idx {i}): Mode 5 ON, hold output="
+                    f"{math.degrees(target_output_rad):.2f}° "
+                    f"(raw {math.degrees(raw_target_rad):.2f}°)."
                 )
             except Exception as exc:
-                self.get_logger().error(f"Failed to init shoulder joint ID {sid}: {exc}")
-
-            sid = self._joint_ids[1]
-            hold_rad = self._joint_offsets[1]
-            try:
-                self._driver.set_operating_mode_ids([sid], CURRENT_BASED_POSITION_CTRL_MODE)
-                self._driver.set_torque_mode_ids([sid], True)
-                self._driver.set_goal_position_single(sid, hold_rad)
-                self.get_logger().info(
-                    f"Arm Joint ID {sid} (Shoulder): Mode 5 ON, holding at {math.degrees(hold_rad)}°."
-                )
-            except Exception as exc:
-                self.get_logger().error(f"Failed to init shoulder joint ID {sid}: {exc}")
+                self.get_logger().error(f"Failed to init joint ID {sid}: {exc}")
 
         # --- 2. Gripper ---
         if self._gripper_id is not None:
@@ -265,6 +345,11 @@ class GelloNode(Node):
         # --- Apply calibration to arm joints only --------------------------
         n_arm = len(self._joint_ids)
         arm_raw = raw[:n_arm]
+        # Absorb Dynamixel multi-turn drift: shift each raw reading to the
+        # nearest 2π of the offset so a ±360° rotation while powered off
+        # does not invalidate calibration.
+        wraps = np.round((arm_raw - self._joint_offsets) / (2.0 * np.pi))
+        arm_raw = arm_raw - wraps * (2.0 * np.pi)
         arm_pos = (arm_raw - self._joint_offsets) * self._joint_signs
 
         # Exponential smoothing
@@ -363,15 +448,19 @@ class GelloNode(Node):
     # ----------------------------------------------------------------------- #
 
     def destroy_node(self) -> None:
-        # Disable torque for active joints before closing
+        # Disable torque for every held arm joint + gripper before closing
         if self._gripper_id is not None:
             try:
                 self._driver.set_torque_mode_ids([self._gripper_id], False)
             except Exception:
                 pass
-        if len(self._joint_ids) > 1:
+        held = [
+            sid for i, sid in enumerate(self._joint_ids)
+            if np.isfinite(self._joint_targets_rad[i])
+        ]
+        if held:
             try:
-                self._driver.set_torque_mode_ids([self._joint_ids[1]], False)
+                self._driver.set_torque_mode_ids(held, False)
             except Exception:
                 pass
 

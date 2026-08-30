@@ -25,6 +25,7 @@ setup(
     entry_points={
         "console_scripts": [
             "gello_node = gello_driver.gello_node:main",
+            "calibrate_offsets = gello_driver.calibrate_offsets:main",
         ],
     },
 )
